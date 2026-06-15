@@ -39,7 +39,7 @@ def get_care_advice(fabric: FabricEnum) -> dict:
     return FABRIC_CARE_RULES.get(fabric, FABRIC_CARE_RULES[FabricEnum.OTHER])
 
 
-def calculate_replacement_status(garment: Garment) -> dict:
+def calculate_replacement_status(garment: Garment, db: Optional[Session] = None) -> dict:
     care_rules = get_care_advice(garment.fabric)
     recommended_uses = care_rules["recommended_uses"]
     replacement_months = care_rules["replacement_months"]
@@ -51,16 +51,39 @@ def calculate_replacement_status(garment: Garment) -> dict:
     months_owned = purchase_days / 30.44
     time_ratio = months_owned / replacement_months if replacement_months > 0 else 0
 
+    actual_deformation = garment.current_deformation
+    if db is not None:
+        latest_wear = (
+            db.query(WearRecord)
+            .filter(WearRecord.garment_id == garment.id)
+            .order_by(WearRecord.wear_date.desc(), WearRecord.created_at.desc())
+            .first()
+        )
+        latest_wash = (
+            db.query(WashRecord)
+            .filter(WashRecord.garment_id == garment.id)
+            .order_by(WashRecord.wash_date.desc(), WashRecord.created_at.desc())
+            .first()
+        )
+        candidates = []
+        if latest_wear:
+            candidates.append((latest_wear.wear_date, latest_wear.deformation_noticed, "wear"))
+        if latest_wash:
+            candidates.append((latest_wash.wash_date, latest_wash.deformation_after, "wash"))
+        if candidates:
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            actual_deformation = candidates[0][1]
+
     deformation_score = {
         DeformationEnum.NONE: 0,
         DeformationEnum.SLIGHT: 0.3,
         DeformationEnum.MODERATE: 0.6,
         DeformationEnum.SEVERE: 1.0,
-    }.get(garment.current_deformation, 0)
+    }.get(actual_deformation, 0)
 
     overall_score = max(use_ratio, time_ratio) + deformation_score * 0.5
 
-    if overall_score >= 1.2 or garment.current_deformation == DeformationEnum.SEVERE:
+    if overall_score >= 1.2 or actual_deformation == DeformationEnum.SEVERE:
         urgency = "立即更换"
     elif overall_score >= 0.9:
         urgency = "建议更换"
@@ -78,7 +101,7 @@ def calculate_replacement_status(garment: Garment) -> dict:
     if time_ratio >= 0.9:
         reasons.append(f"已使用 {months_owned:.1f} 个月，接近推荐更换周期 {replacement_months} 个月")
     if deformation_score >= 0.3:
-        reasons.append(f"存在{garment.current_deformation.value}变形")
+        reasons.append(f"存在{actual_deformation.value}变形")
     if not reasons:
         reasons.append("状态正常，继续使用")
 
@@ -96,11 +119,11 @@ def calculate_replacement_status(garment: Garment) -> dict:
     }
 
 
-def garment_to_schema(garment: Garment) -> schemas.Garment:
+def garment_to_schema(garment: Garment, db: Optional[Session] = None) -> schemas.Garment:
     garment_dict = {c.name: getattr(garment, c.name) for c in garment.__table__.columns}
     garment_dict["storage_zone"] = garment.storage_zone
     garment_dict["care_advice"] = get_care_advice(garment.fabric)
-    garment_dict["replacement_status"] = calculate_replacement_status(garment)
+    garment_dict["replacement_status"] = calculate_replacement_status(garment, db)
     return schemas.Garment.model_validate(garment_dict)
 
 
@@ -198,7 +221,7 @@ def create_garment(garment: schemas.GarmentCreate, db: Session = Depends(get_db)
     db.commit()
     db.refresh(db_garment)
     db_garment = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.id == db_garment.id).first()
-    return garment_to_schema(db_garment)
+    return garment_to_schema(db_garment, db)
 
 
 @app.get("/api/garments", response_model=List[schemas.Garment])
@@ -219,7 +242,7 @@ def list_garments(
     if is_active is not None:
         query = query.filter(Garment.is_active == is_active)
     garments = query.order_by(Garment.created_at.desc()).all()
-    return [garment_to_schema(g) for g in garments]
+    return [garment_to_schema(g, db) for g in garments]
 
 
 @app.get("/api/garments/{garment_id}", response_model=schemas.Garment)
@@ -227,7 +250,7 @@ def get_garment(garment_id: int, db: Session = Depends(get_db)):
     garment = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.id == garment_id).first()
     if not garment:
         raise HTTPException(status_code=404, detail="衣物不存在")
-    return garment_to_schema(garment)
+    return garment_to_schema(garment, db)
 
 
 @app.put("/api/garments/{garment_id}", response_model=schemas.Garment)
@@ -245,7 +268,7 @@ def update_garment(garment_id: int, garment_data: schemas.GarmentUpdate, db: Ses
     db.commit()
     db.refresh(garment)
     garment = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.id == garment_id).first()
-    return garment_to_schema(garment)
+    return garment_to_schema(garment, db)
 
 
 @app.delete("/api/garments/{garment_id}")
@@ -307,8 +330,7 @@ def create_wear_record(record: schemas.WearRecordCreate, db: Session = Depends(g
     db.add(db_record)
     garment.use_count += 1
     garment.last_worn_date = record.wear_date
-    if record.deformation_noticed != DeformationEnum.NONE:
-        garment.current_deformation = record.deformation_noticed
+    garment.current_deformation = record.deformation_noticed
     db.commit()
     db.refresh(db_record)
     record_dict = {c.name: getattr(db_record, c.name) for c in db_record.__table__.columns}
@@ -352,12 +374,12 @@ def get_replacement_reminders(
     )
     reminders = []
     for g in garments:
-        status = calculate_replacement_status(g)
+        status = calculate_replacement_status(g, db)
         if urgency_filter and status["urgency"] != urgency_filter:
             continue
         if status["urgency"] in ["立即更换", "建议更换", "注意观察"]:
             reminders.append({
-                "garment": garment_to_schema(g),
+                "garment": garment_to_schema(g, db),
                 "reason": status["reasons"][0],
                 "days_until_recommended": status["days_remaining"],
                 "urgency": status["urgency"],
@@ -437,7 +459,22 @@ def get_statistics(db: Session = Depends(get_db)):
     idle_threshold_days = 60
     idle_garments = []
     for g in all_garments:
-        last_active = g.last_worn_date or g.last_wash_date or g.purchase_date
+        latest_wear = (
+            db.query(func.max(WearRecord.wear_date))
+            .filter(WearRecord.garment_id == g.id)
+            .scalar()
+        )
+        latest_wash = (
+            db.query(func.max(WashRecord.wash_date))
+            .filter(WashRecord.garment_id == g.id)
+            .scalar()
+        )
+        candidate_dates = [g.purchase_date]
+        if latest_wear:
+            candidate_dates.append(latest_wear)
+        if latest_wash:
+            candidate_dates.append(latest_wash)
+        last_active = max(candidate_dates)
         idle_days = (today - last_active).days
         if idle_days >= idle_threshold_days:
             idle_garments.append({
@@ -446,7 +483,8 @@ def get_statistics(db: Session = Depends(get_db)):
                 "category": g.category.value,
                 "idle_days": idle_days,
                 "use_count": g.use_count,
-                "last_worn_date": g.last_worn_date.isoformat() if g.last_worn_date else None,
+                "last_worn_date": latest_wear.isoformat() if latest_wear else None,
+                "last_active_date": last_active.isoformat(),
             })
     idle_garments.sort(key=lambda x: x["idle_days"], reverse=True)
 

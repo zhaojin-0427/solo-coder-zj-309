@@ -42,7 +42,7 @@
             <el-icon :size="24" color="#388e3c"><Present /></el-icon>
           </div>
           <div>
-            <div class="num">{{ washByMethod.hand || 0 }}</div>
+            <div class="num">{{ washByMethod['手洗'] || 0 }}</div>
             <div class="label">手洗次数</div>
           </div>
         </div>
