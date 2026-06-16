@@ -1,7 +1,8 @@
 import axios from 'axios'
 import type {
   StorageZone, Garment, WashRecord, WearRecord,
-  ReplacementReminder, Statistics, Enums, CareAdvice
+  ReplacementReminder, Statistics, Enums, CareAdvice,
+  WashPlan, GarmentDetail, PlanGroupResponse
 } from './types'
 
 const api = axios.create({
@@ -29,8 +30,14 @@ export const garmentApi = {
   create: (data: any) => api.post<any, Garment>('/garments', data),
   list: (params?: any) => api.get<any, Garment[]>('/garments', { params }),
   get: (id: number) => api.get<any, Garment>(`/garments/${id}`),
+  getDetail: (id: number) => api.get<any, GarmentDetail>(`/garments/${id}/detail`),
   update: (id: number, data: any) => api.put<any, Garment>(`/garments/${id}`, data),
   delete: (id: number) => api.delete(`/garments/${id}`)
+}
+
+export const washPlanApi = {
+  list: (params?: any) => api.get<any, WashPlan[]>('/wash-plans', { params }),
+  grouped: () => api.get<any, PlanGroupResponse>('/wash-plans/grouped')
 }
 
 export const washRecordApi = {

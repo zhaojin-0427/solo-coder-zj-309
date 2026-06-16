@@ -140,6 +140,30 @@ class ReplacementReminder(BaseModel):
     urgency: str
 
 
+class WashPlan(BaseModel):
+    garment: Garment
+    suggested_wash_date: date
+    suggested_wash_method: str
+    overdue_days: int
+    risk_level: str
+    trigger_reason: str
+    uses_since_last_wash: int
+    days_since_last_wash: int
+    last_wash_date: Optional[date] = None
+
+
+class GarmentDetail(Garment):
+    recent_wear_records: List[WearRecord] = []
+    recent_wash_records: List[WashRecord] = []
+    next_wash_plan: Optional[WashPlan] = None
+
+
+class PlanGroupResponse(BaseModel):
+    overdue: List[WashPlan]
+    today: List[WashPlan]
+    next_7_days: List[WashPlan]
+
+
 class StatisticsResponse(BaseModel):
     total_garments: int
     total_washes: int
@@ -149,3 +173,6 @@ class StatisticsResponse(BaseModel):
     idle_garments: List[dict]
     wash_frequency_stats: List[dict]
     monthly_wash_trend: List[dict]
+    plan_completion_rate: float
+    overdue_wash_count: int
+    avg_wash_interval_by_fabric: List[dict]

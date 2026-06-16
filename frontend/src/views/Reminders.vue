@@ -129,7 +129,7 @@
               <el-icon><Check /></el-icon>
               已更换，停用此件
             </el-button>
-            <el-button type="info" @click="handleIgnore(item.garment.id)">
+            <el-button type="info" @click="handleViewDetail(item.garment.id)">
               <el-icon><View /></el-icon>
               查看详情
             </el-button>
@@ -150,11 +150,17 @@
         </div>
       </el-card>
     </div>
+
+    <GarmentDetailDrawer
+      v-model:visible="drawerVisible"
+      :garment-id="selectedGarmentId"
+      @refresh="onDrawerRefresh"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, defineAsyncComponent } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { reminderApi, garmentApi } from '@/api'
 import type { ReplacementReminder } from '@/types'
@@ -163,10 +169,15 @@ import {
   CircleCheckFilled
 } from '@element-plus/icons-vue'
 
-const emit = defineEmits(['refresh-reminders'])
+const emit = defineEmits(['refresh-reminders', 'refresh-wash-plans'])
+
+const GarmentDetailDrawer = defineAsyncComponent(() => import('@/components/GarmentDetailDrawer.vue'))
 
 const reminders = ref<ReplacementReminder[]>([])
 const urgencyFilter = ref('')
+
+const drawerVisible = ref(false)
+const selectedGarmentId = ref<number | null>(null)
 
 const urgentCount = computed(() => reminders.value.filter(r => r.urgency === '立即更换').length)
 const replaceCount = computed(() => reminders.value.filter(r => r.urgency === '建议更换').length)
@@ -227,6 +238,12 @@ const loadReminders = async () => {
   }
 }
 
+const onDrawerRefresh = async () => {
+  await loadReminders()
+  emit('refresh-reminders')
+  emit('refresh-wash-plans')
+}
+
 const handleReplaced = async (id: number) => {
   try {
     await ElMessageBox.confirm(
@@ -243,8 +260,9 @@ const handleReplaced = async (id: number) => {
   }
 }
 
-const handleIgnore = (_id: number) => {
-  ElMessage.info('请前往衣物档案页面查看完整详情')
+const handleViewDetail = (id: number) => {
+  selectedGarmentId.value = id
+  drawerVisible.value = true
 }
 
 onMounted(loadReminders)

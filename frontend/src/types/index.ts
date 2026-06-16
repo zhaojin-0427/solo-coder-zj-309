@@ -86,6 +86,30 @@ export interface ReplacementReminder {
   urgency: string
 }
 
+export interface WashPlan {
+  garment: Garment
+  suggested_wash_date: string
+  suggested_wash_method: string
+  overdue_days: number
+  risk_level: string
+  trigger_reason: string
+  uses_since_last_wash: number
+  days_since_last_wash: number
+  last_wash_date: string | null
+}
+
+export interface GarmentDetail extends Garment {
+  recent_wear_records: WearRecord[]
+  recent_wash_records: WashRecord[]
+  next_wash_plan: WashPlan | null
+}
+
+export interface PlanGroupResponse {
+  overdue: WashPlan[]
+  today: WashPlan[]
+  next_7_days: WashPlan[]
+}
+
 export interface Statistics {
   total_garments: number
   total_washes: number
@@ -128,6 +152,13 @@ export interface Statistics {
     month: string
     total_washes: number
     washes_with_deformation: number
+  }>
+  plan_completion_rate: number
+  overdue_wash_count: number
+  avg_wash_interval_by_fabric: Array<{
+    fabric: string
+    avg_days_between_washes: number
+    wash_count: number
   }>
 }
 

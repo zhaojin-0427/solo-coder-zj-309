@@ -119,6 +119,147 @@ def calculate_replacement_status(garment: Garment, db: Optional[Session] = None)
     }
 
 
+def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
+    if not garment.is_active:
+        return None
+
+    care_rules = get_care_advice(garment.fabric)
+    today = date.today()
+
+    wears_since_last_wash = 0
+    days_since_last_wash = 0
+    last_wash_date = garment.last_wash_date
+
+    all_wears = (
+        db.query(WearRecord)
+        .filter(WearRecord.garment_id == garment.id)
+        .order_by(WearRecord.wear_date.desc())
+        .all()
+    )
+
+    if last_wash_date:
+        wears_after_wash = [w for w in all_wears if w.wear_date > last_wash_date]
+        wears_since_last_wash = len(wears_after_wash)
+        days_since_last_wash = (today - last_wash_date).days
+    else:
+        wears_since_last_wash = len(all_wears)
+        if garment.purchase_date:
+            days_since_last_wash = (today - garment.purchase_date).days
+        else:
+            days_since_last_wash = 0
+
+    uses_between_wash_map = {
+        CategoryEnum.BRA: 3,
+        CategoryEnum.PANTY: 1,
+        CategoryEnum.PAJAMAS: 7,
+        CategoryEnum.SPORTS: 1,
+        CategoryEnum.SHAPEWEAR: 3,
+        CategoryEnum.THERMAL: 5,
+        CategoryEnum.OTHER: 3,
+    }
+    recommended_uses_between_wash = uses_between_wash_map.get(garment.category, 3)
+
+    deformation_factor = {
+        DeformationEnum.NONE: 1.0,
+        DeformationEnum.SLIGHT: 0.85,
+        DeformationEnum.MODERATE: 0.7,
+        DeformationEnum.SEVERE: 0.5,
+    }.get(garment.current_deformation, 1.0)
+
+    adjusted_max_uses = max(1, int(recommended_uses_between_wash * deformation_factor))
+    max_days_between_wash = max(3, int(14 * deformation_factor))
+
+    triggers = []
+    suggested_dates = []
+
+    if wears_since_last_wash >= adjusted_max_uses:
+        overdue_by_uses = wears_since_last_wash - adjusted_max_uses + 1
+        triggers.append(f"已穿着 {wears_since_last_wash} 次，超过建议的 {adjusted_max_uses} 次（+{overdue_by_uses}）")
+        suggested_date = today
+        suggested_dates.append(suggested_date)
+
+    if days_since_last_wash >= max_days_between_wash:
+        overdue_by_days = days_since_last_wash - max_days_between_wash + 1
+        triggers.append(f"距上次洗护已 {days_since_last_wash} 天，超过建议的 {max_days_between_wash} 天（+{overdue_by_days}）")
+        if not suggested_dates or today < suggested_dates[0]:
+            suggested_date = today
+            suggested_dates.insert(0, suggested_date)
+
+    if garment.current_deformation in [DeformationEnum.MODERATE, DeformationEnum.SEVERE]:
+        triggers.append(f"存在{garment.current_deformation.value}变形，需要更频繁洗护")
+
+    if not suggested_dates:
+        uses_remaining = adjusted_max_uses - wears_since_last_wash
+        days_remaining = max_days_between_wash - days_since_last_wash
+
+        if last_wash_date:
+            suggested_by_days = last_wash_date + timedelta(days=max_days_between_wash)
+        else:
+            suggested_by_days = garment.purchase_date + timedelta(days=max_days_between_wash)
+
+        if all_wears and last_wash_date:
+            recent_wears_after = [w for w in all_wears if w.wear_date > last_wash_date]
+            if len(recent_wears_after) >= 2:
+                recent_wears_after_sorted = sorted(recent_wears_after, key=lambda w: w.wear_date)
+                days_between_wears = (recent_wears_after_sorted[-1].wear_date - recent_wears_after_sorted[0].wear_date).days
+                if days_between_wears > 0 and wears_since_last_wash > 0:
+                    avg_days_per_use = days_between_wears / max(1, len(recent_wears_after) - 1)
+                    projected_days = max(0, uses_remaining) * max(1, avg_days_per_use)
+                    suggested_by_uses = today + timedelta(days=projected_days)
+                    suggested_date = min(suggested_by_days, suggested_by_uses)
+                    triggers.append(f"按当前穿着频率，预计还可穿 {uses_remaining} 次")
+                else:
+                    suggested_date = suggested_by_days
+                    triggers.append(f"还可穿 {uses_remaining} 次或 {days_remaining} 天后需要洗护")
+            else:
+                suggested_date = suggested_by_days
+                triggers.append(f"还可穿 {uses_remaining} 次或 {days_remaining} 天后需要洗护")
+        else:
+            suggested_date = suggested_by_days
+            triggers.append(f"建议 {max_days_between_wash} 天内洗护（还可穿 {uses_remaining} 次）")
+
+        suggested_dates.append(suggested_date)
+
+    final_suggested_date = min(suggested_dates) if suggested_dates else today
+    overdue_days = max(0, (today - final_suggested_date).days)
+
+    if overdue_days > 7:
+        risk_level = "高风险"
+    elif overdue_days > 2:
+        risk_level = "中风险"
+    elif overdue_days > 0:
+        risk_level = "低风险"
+    elif (final_suggested_date - today).days <= 1:
+        risk_level = "待处理"
+    else:
+        risk_level = "正常"
+
+    wash_method_map = {
+        "机洗/手洗均可": "机洗或手洗",
+        "手洗或干洗": "建议手洗或干洗",
+        "手洗或洗衣袋机洗": "手洗或洗衣袋机洗",
+        "请参考洗水标": "按洗水标说明",
+    }
+    suggested_wash_method = wash_method_map.get(
+        care_rules["wash_method"],
+        care_rules["wash_method"]
+    )
+
+    trigger_reason = "；".join(triggers) if triggers else "状态良好"
+
+    return {
+        "garment": garment_to_schema(garment, db),
+        "suggested_wash_date": final_suggested_date,
+        "suggested_wash_method": suggested_wash_method,
+        "overdue_days": overdue_days,
+        "risk_level": risk_level,
+        "trigger_reason": trigger_reason,
+        "uses_since_last_wash": wears_since_last_wash,
+        "days_since_last_wash": days_since_last_wash,
+        "last_wash_date": last_wash_date,
+    }
+
+
 def garment_to_schema(garment: Garment, db: Optional[Session] = None) -> schemas.Garment:
     garment_dict = {c.name: getattr(garment, c.name) for c in garment.__table__.columns}
     garment_dict["storage_zone"] = garment.storage_zone
@@ -392,6 +533,131 @@ def get_replacement_reminders(
     return reminders
 
 
+@app.get("/api/wash-plans", response_model=List[schemas.WashPlan])
+def get_wash_plans(
+    risk_level: Optional[str] = None,
+    storage_zone_id: Optional[int] = None,
+    fabric: Optional[FabricEnum] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.is_active == 1)
+    if storage_zone_id is not None:
+        query = query.filter(Garment.storage_zone_id == storage_zone_id)
+    if fabric:
+        query = query.filter(Garment.fabric == fabric)
+    garments = query.order_by(Garment.last_wash_date.is_(None).desc(), Garment.last_wash_date.asc()).all()
+
+    plans = []
+    for g in garments:
+        plan = calculate_wash_plan(g, db)
+        if not plan:
+            continue
+        if risk_level and plan["risk_level"] != risk_level:
+            continue
+        if start_date and plan["suggested_wash_date"] < start_date:
+            continue
+        if end_date and plan["suggested_wash_date"] > end_date:
+            continue
+        plans.append(plan)
+
+    plans.sort(key=lambda x: (
+        {"高风险": 0, "中风险": 1, "低风险": 2, "待处理": 3, "正常": 4}.get(x["risk_level"], 99),
+        x["suggested_wash_date"]
+    ))
+    return plans
+
+
+@app.get("/api/wash-plans/grouped", response_model=schemas.PlanGroupResponse)
+def get_wash_plans_grouped(
+    db: Session = Depends(get_db)
+):
+    today = date.today()
+    seven_days_later = today + timedelta(days=7)
+
+    garments = (
+        db.query(Garment)
+        .options(joinedload(Garment.storage_zone))
+        .filter(Garment.is_active == 1)
+        .all()
+    )
+
+    overdue = []
+    today_list = []
+    next_7_days = []
+
+    for g in garments:
+        plan = calculate_wash_plan(g, db)
+        if not plan:
+            continue
+        if plan["overdue_days"] > 0:
+            overdue.append(plan)
+        elif plan["suggested_wash_date"] == today:
+            today_list.append(plan)
+        elif plan["suggested_wash_date"] <= seven_days_later:
+            next_7_days.append(plan)
+
+    sort_key = lambda x: (x["overdue_days"], x["suggested_wash_date"])
+    overdue.sort(key=sort_key, reverse=True)
+    today_list.sort(key=sort_key)
+    next_7_days.sort(key=sort_key)
+
+    return {
+        "overdue": overdue,
+        "today": today_list,
+        "next_7_days": next_7_days,
+    }
+
+
+@app.get("/api/garments/{garment_id}/detail", response_model=schemas.GarmentDetail)
+def get_garment_detail(garment_id: int, db: Session = Depends(get_db)):
+    garment = (
+        db.query(Garment)
+        .options(joinedload(Garment.storage_zone))
+        .filter(Garment.id == garment_id)
+        .first()
+    )
+    if not garment:
+        raise HTTPException(status_code=404, detail="衣物不存在")
+
+    recent_wears = (
+        db.query(WearRecord)
+        .filter(WearRecord.garment_id == garment_id)
+        .order_by(WearRecord.wear_date.desc())
+        .limit(5)
+        .all()
+    )
+    recent_washes = (
+        db.query(WashRecord)
+        .filter(WashRecord.garment_id == garment_id)
+        .order_by(WashRecord.wash_date.desc())
+        .limit(5)
+        .all()
+    )
+
+    wear_records = []
+    for r in recent_wears:
+        rd = {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        rd["garment_name"] = garment.name
+        wear_records.append(schemas.WearRecord.model_validate(rd))
+
+    wash_records = []
+    for r in recent_washes:
+        rd = {c.name: getattr(r, c.name) for c in r.__table__.columns}
+        rd["garment_name"] = garment.name
+        wash_records.append(schemas.WashRecord.model_validate(rd))
+
+    next_plan = calculate_wash_plan(garment, db)
+
+    return {
+        **garment_to_schema(garment, db).model_dump(),
+        "recent_wear_records": wear_records,
+        "recent_wash_records": wash_records,
+        "next_wash_plan": next_plan,
+    }
+
+
 @app.get("/api/statistics", response_model=schemas.StatisticsResponse)
 def get_statistics(db: Session = Depends(get_db)):
     today = date.today()
@@ -520,6 +786,37 @@ def get_statistics(db: Session = Depends(get_db)):
         })
     monthly_wash_trend = monthly_wash_trend[-12:]
 
+    all_plans = []
+    for g in all_garments:
+        plan = calculate_wash_plan(g, db)
+        if plan:
+            all_plans.append(plan)
+
+    total_planned = len(all_plans)
+    overdue_wash_count = sum(1 for p in all_plans if p["overdue_days"] > 0)
+    plan_completion_rate = round(
+        (total_planned - overdue_wash_count) / total_planned * 100, 1
+    ) if total_planned > 0 else 100.0
+
+    fabric_wash_intervals = defaultdict(list)
+    all_wash_records_sorted = sorted(all_wash_records, key=lambda x: x.wash_date)
+    for wr in all_wash_records_sorted:
+        fabric_wash_intervals[wr.garment.fabric.value].append(wr.wash_date)
+
+    avg_wash_interval_by_fabric = []
+    for fabric_name, dates in fabric_wash_intervals.items():
+        if len(dates) >= 2:
+            total_interval = 0
+            for i in range(1, len(dates)):
+                total_interval += (dates[i] - dates[i-1]).days
+            avg_interval = round(total_interval / (len(dates) - 1), 1)
+            avg_wash_interval_by_fabric.append({
+                "fabric": fabric_name,
+                "avg_days_between_washes": avg_interval,
+                "wash_count": len(dates),
+            })
+    avg_wash_interval_by_fabric.sort(key=lambda x: x["avg_days_between_washes"])
+
     return {
         "total_garments": total_garments,
         "total_washes": total_washes,
@@ -529,6 +826,9 @@ def get_statistics(db: Session = Depends(get_db)):
         "idle_garments": idle_garments,
         "wash_frequency_stats": wash_frequency_stats[:20],
         "monthly_wash_trend": monthly_wash_trend,
+        "plan_completion_rate": plan_completion_rate,
+        "overdue_wash_count": overdue_wash_count,
+        "avg_wash_interval_by_fabric": avg_wash_interval_by_fabric,
     }
 
 

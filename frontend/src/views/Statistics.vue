@@ -12,7 +12,7 @@
     </div>
 
     <el-row :gutter="20" style="margin-bottom: 24px">
-      <el-col :span="6">
+      <el-col :span="4">
         <div class="kpi-card kpi-1">
           <div class="kpi-icon">
             <el-icon :size="28"><Female /></el-icon>
@@ -23,7 +23,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="6">
+      <el-col :span="4">
         <div class="kpi-card kpi-2">
           <div class="kpi-icon">
             <el-icon :size="28"><Brush /></el-icon>
@@ -34,7 +34,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="6">
+      <el-col :span="4">
         <div class="kpi-card kpi-3">
           <div class="kpi-icon">
             <el-icon :size="28"><Warning /></el-icon>
@@ -45,7 +45,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="6">
+      <el-col :span="4">
         <div class="kpi-card kpi-4">
           <div class="kpi-icon">
             <el-icon :size="28"><Timer /></el-icon>
@@ -53,6 +53,28 @@
           <div>
             <div class="kpi-value">{{ avgWashPerGarment }}</div>
             <div class="kpi-label">平均洗护/件</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="4">
+        <div class="kpi-card kpi-5">
+          <div class="kpi-icon">
+            <el-icon :size="28"><CircleCheckFilled /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.plan_completion_rate || 0 }}%</div>
+            <div class="kpi-label">计划完成率</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="4">
+        <div class="kpi-card kpi-6">
+          <div class="kpi-icon">
+            <el-icon :size="28"><AlarmClock /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.overdue_wash_count || 0 }}</div>
+            <div class="kpi-label">逾期洗护</div>
           </div>
         </div>
       </el-col>
@@ -96,6 +118,18 @@
             变形高发品类 TOP
           </h3>
           <div ref="deformationChartRef" class="chart-box"></div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" style="margin-top: 20px">
+      <el-col :span="24">
+        <el-card shadow="never" class="stats-card chart-card">
+          <h3 class="chart-title">
+            <el-icon><Timer /></el-icon>
+            各面料平均洗护间隔（天）
+          </h3>
+          <div ref="avgIntervalChartRef" class="chart-box"></div>
         </el-card>
       </el-col>
     </el-row>
@@ -230,7 +264,8 @@ import type { Statistics } from '@/types'
 import * as echarts from 'echarts'
 import {
   DataLine, Refresh, Female, Brush, Warning, Timer,
-  PieChart, Histogram, TrendCharts, Clock, Coin, Grid
+  PieChart, Histogram, TrendCharts, Clock, Coin, Grid,
+  CircleCheckFilled, AlarmClock
 } from '@element-plus/icons-vue'
 
 const stats = ref<Statistics | null>(null)
@@ -238,11 +273,13 @@ const fabricChartRef = ref<HTMLElement | null>(null)
 const fabricUseChartRef = ref<HTMLElement | null>(null)
 const washTrendChartRef = ref<HTMLElement | null>(null)
 const deformationChartRef = ref<HTMLElement | null>(null)
+const avgIntervalChartRef = ref<HTMLElement | null>(null)
 
 let fabricChart: echarts.ECharts | null = null
 let fabricUseChart: echarts.ECharts | null = null
 let washTrendChart: echarts.ECharts | null = null
 let deformationChart: echarts.ECharts | null = null
+let avgIntervalChart: echarts.ECharts | null = null
 
 const deformationTotal = computed(() => {
   if (!stats.value) return 0
@@ -399,6 +436,50 @@ const renderCharts = () => {
       }]
     })
   }
+
+  if (avgIntervalChartRef.value && stats.value) {
+    if (avgIntervalChart) avgIntervalChart.dispose()
+    avgIntervalChart = echarts.init(avgIntervalChartRef.value)
+    const intervalData = stats.value.avg_wash_interval_by_fabric || []
+    avgIntervalChart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const p = params[0]
+          const item = intervalData[p.dataIndex]
+          return `${item?.fabric || ''}<br/>平均洗护间隔: ${p.value} 天<br/>洗护记录: ${item?.wash_count || 0} 次`
+        }
+      },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: intervalData.map(d => d.fabric),
+        axisLabel: { rotate: 30 }
+      },
+      yAxis: {
+        type: 'value',
+        name: '天'
+      },
+      series: [{
+        type: 'bar',
+        data: intervalData.map((d, i) => ({
+          value: d.avg_days_between_washes,
+          itemStyle: {
+            color: d.avg_days_between_washes <= 5 ? '#ef5350' : d.avg_days_between_washes <= 10 ? '#ffa726' : '#66bb6a'
+          }
+        })),
+        label: {
+          show: true,
+          position: 'top',
+          formatter: '{c}天',
+          fontWeight: 'bold',
+          color: '#5d4037'
+        },
+        barWidth: '40%'
+      }]
+    })
+  }
 }
 
 const handleResize = () => {
@@ -406,6 +487,7 @@ const handleResize = () => {
   fabricUseChart?.resize()
   washTrendChart?.resize()
   deformationChart?.resize()
+  avgIntervalChart?.resize()
 }
 
 onMounted(async () => {
@@ -441,6 +523,8 @@ onMounted(async () => {
 .kpi-2 { background: linear-gradient(135deg, #7e57c2, #9575cd); }
 .kpi-3 { background: linear-gradient(135deg, #ef5350, #e57373); }
 .kpi-4 { background: linear-gradient(135deg, #26c6da, #4dd0e1); }
+.kpi-5 { background: linear-gradient(135deg, #66bb6a, #81c784); }
+.kpi-6 { background: linear-gradient(135deg, #ef5350, #e57373); }
 
 .kpi-icon {
   width: 56px;
