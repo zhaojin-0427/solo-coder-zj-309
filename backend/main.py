@@ -128,7 +128,6 @@ def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
 
     wears_since_last_wash = 0
     days_since_last_wash = 0
-    last_wash_date = garment.last_wash_date
 
     all_wears = (
         db.query(WearRecord)
@@ -136,6 +135,15 @@ def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
         .order_by(WearRecord.wear_date.desc())
         .all()
     )
+
+    all_washes = (
+        db.query(WashRecord)
+        .filter(WashRecord.garment_id == garment.id)
+        .order_by(WashRecord.wash_date.desc())
+        .all()
+    )
+
+    last_wash_date = all_washes[0].wash_date if all_washes else garment.last_wash_date
 
     if last_wash_date:
         wears_after_wash = [w for w in all_wears if w.wear_date > last_wash_date]
@@ -171,19 +179,23 @@ def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
 
     triggers = []
     suggested_dates = []
+    overdue_accumulated = 0
 
     if wears_since_last_wash >= adjusted_max_uses:
         overdue_by_uses = wears_since_last_wash - adjusted_max_uses + 1
         triggers.append(f"已穿着 {wears_since_last_wash} 次，超过建议的 {adjusted_max_uses} 次（+{overdue_by_uses}）")
-        suggested_date = today
+        projected_last_wear_date = all_wears[0].wear_date if all_wears else (last_wash_date or garment.purchase_date or today)
+        overdue_accumulated = max(overdue_accumulated, overdue_by_uses * 2, (today - projected_last_wear_date).days)
+        suggested_date = today - timedelta(days=max(1, overdue_by_uses * 2))
         suggested_dates.append(suggested_date)
 
     if days_since_last_wash >= max_days_between_wash:
         overdue_by_days = days_since_last_wash - max_days_between_wash + 1
         triggers.append(f"距上次洗护已 {days_since_last_wash} 天，超过建议的 {max_days_between_wash} 天（+{overdue_by_days}）")
-        if not suggested_dates or today < suggested_dates[0]:
-            suggested_date = today
-            suggested_dates.insert(0, suggested_date)
+        overdue_accumulated = max(overdue_accumulated, overdue_by_days)
+        date_from_rule = today - timedelta(days=overdue_by_days)
+        if not suggested_dates or date_from_rule < suggested_dates[0]:
+            suggested_dates.insert(0, date_from_rule)
 
     if garment.current_deformation in [DeformationEnum.MODERATE, DeformationEnum.SEVERE]:
         triggers.append(f"存在{garment.current_deformation.value}变形，需要更频繁洗护")
@@ -221,7 +233,13 @@ def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
         suggested_dates.append(suggested_date)
 
     final_suggested_date = min(suggested_dates) if suggested_dates else today
-    overdue_days = max(0, (today - final_suggested_date).days)
+    raw_overdue = (today - final_suggested_date).days
+    overdue_days = max(0, overdue_accumulated, raw_overdue)
+
+    if overdue_days > 0 and (today - final_suggested_date).days <= 0:
+        final_suggested_date = today - timedelta(days=overdue_days)
+
+    actual_suggested_date = final_suggested_date
 
     if overdue_days > 7:
         risk_level = "高风险"
@@ -249,7 +267,7 @@ def calculate_wash_plan(garment: Garment, db: Session) -> Optional[dict]:
 
     return {
         "garment": garment_to_schema(garment, db),
-        "suggested_wash_date": final_suggested_date,
+        "suggested_wash_date": actual_suggested_date,
         "suggested_wash_method": suggested_wash_method,
         "overdue_days": overdue_days,
         "risk_level": risk_level,
@@ -265,6 +283,31 @@ def garment_to_schema(garment: Garment, db: Optional[Session] = None) -> schemas
     garment_dict["storage_zone"] = garment.storage_zone
     garment_dict["care_advice"] = get_care_advice(garment.fabric)
     garment_dict["replacement_status"] = calculate_replacement_status(garment, db)
+
+    if db is not None:
+        latest_wash = (
+            db.query(WashRecord)
+            .filter(WashRecord.garment_id == garment.id)
+            .order_by(WashRecord.wash_date.desc())
+            .first()
+        )
+        if latest_wash:
+            garment_dict["last_wash_date"] = latest_wash.wash_date
+            total_washes = db.query(WashRecord).filter(WashRecord.garment_id == garment.id).count()
+            garment_dict["wash_count"] = total_washes
+
+        total_wears = db.query(WearRecord).filter(WearRecord.garment_id == garment.id).count()
+        garment_dict["use_count"] = total_wears
+
+        latest_wear = (
+            db.query(WearRecord)
+            .filter(WearRecord.garment_id == garment.id)
+            .order_by(WearRecord.wear_date.desc())
+            .first()
+        )
+        if latest_wear:
+            garment_dict["last_worn_date"] = latest_wear.wear_date
+
     return schemas.Garment.model_validate(garment_dict)
 
 
