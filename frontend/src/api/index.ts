@@ -2,7 +2,8 @@ import axios from 'axios'
 import type {
   StorageZone, Garment, WashRecord, WearRecord,
   ReplacementReminder, Statistics, Enums, CareAdvice,
-  WashPlan, GarmentDetail, PlanGroupResponse
+  WashPlan, GarmentDetail, PlanGroupResponse,
+  TripPlanSummary, TripPlanDetail, TripPlan, TripItem
 } from './types'
 
 const api = axios.create({
@@ -65,6 +66,21 @@ export const statisticsApi = {
 
 export const enumApi = {
   get: () => api.get<any, Enums>('/enums')
+}
+
+export const tripPlanApi = {
+  create: (data: any) => api.post<any, TripPlan>('/trip-plans', data),
+  list: (params?: any) => api.get<any, TripPlanSummary[]>('/trip-plans', { params }),
+  get: (id: number) => api.get<any, TripPlanDetail>(`/trip-plans/${id}`),
+  update: (id: number, data: any) => api.put<any, TripPlan>(`/trip-plans/${id}`, data),
+  delete: (id: number) => api.delete(`/trip-plans/${id}`),
+  regenerate: (id: number) => api.post<any, TripPlanDetail>(`/trip-plans/${id}/regenerate`)
+}
+
+export const tripItemApi = {
+  update: (id: number, data: any) => api.put<any, TripItem>(`/trip-items/${id}`, data),
+  togglePack: (id: number) => api.put<any, TripItem>(`/trip-items/${id}/toggle-pack`),
+  replace: (id: number, newGarmentId: number) => api.post<any, TripItem>(`/trip-items/${id}/replace?new_garment_id=${newGarmentId}`)
 }
 
 export default api

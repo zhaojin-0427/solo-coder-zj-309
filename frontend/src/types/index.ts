@@ -162,6 +162,23 @@ export interface Statistics {
   }>
 }
 
+export interface TripOccupancy {
+  trip_id: number
+  trip_name: string
+  destination: string
+  start_date: string
+  end_date: string
+  status: string
+  pack_status: string
+}
+
+export interface GarmentDetail extends Garment {
+  recent_wear_records: WearRecord[]
+  recent_wash_records: WashRecord[]
+  next_wash_plan: WashPlan | null
+  trip_occupancy?: TripOccupancy[]
+}
+
 export interface EnumOption {
   value: string
   name: string
@@ -172,4 +189,189 @@ export interface Enums {
   fabrics: EnumOption[]
   wash_methods: EnumOption[]
   deformation_levels: EnumOption[]
+  activity_scenes: EnumOption[]
+  change_preferences: EnumOption[]
+  trip_statuses: EnumOption[]
+  pack_statuses: EnumOption[]
+  recommend_levels: EnumOption[]
+}
+
+export interface TripItem {
+  id: number
+  trip_plan_id: number
+  garment_id: number
+  recommend_level: string
+  recommend_reasons: string
+  is_user_adjusted: number
+  planned_quantity: number
+  pack_status: string
+  packed_quantity: number
+  actual_used: number
+  need_wash_after: number
+  replaced_from_garment_id: number | null
+  day_assignments: string
+  notes: string
+  created_at: string
+  updated_at: string
+  garment: Garment | null
+  replaced_from_garment: Garment | null
+}
+
+export interface TripPlanBase {
+  id: number
+  name: string
+  destination: string
+  start_date: string
+  end_date: string
+  duration_days: number
+  weather_min: number | null
+  weather_max: number | null
+  weather_description: string
+  activity_scenes: string
+  change_preference: string
+  status: string
+  notes: string
+  created_at: string
+  updated_at: string
+  items: TripItem[]
+}
+
+export interface TripPlanSummary {
+  id: number
+  name: string
+  destination: string
+  start_date: string
+  end_date: string
+  duration_days: number
+  status: string
+  items_count: number
+  packed_count: number
+  must_count: number
+  created_at: string
+}
+
+export interface DayOutfitPlan {
+  day_index: number
+  date: string
+  garments: Garment[]
+}
+
+export interface StoragePickupPath {
+  storage_zone_id: number | null
+  storage_zone_name: string
+  garments: Array<{
+    id: number
+    name: string
+    category: string
+    color: string
+    quantity: number
+    recommend_level: string
+    pack_status: string
+  }>
+  total_items: number
+}
+
+export interface RecommendationSummary {
+  must_carry: TripItem[]
+  optional: TripItem[]
+  not_recommended: TripItem[]
+  total_estimated_wears: number
+  estimated_wash_after_return: number
+  change_gap_analysis: {
+    duration_days: number
+    change_preference: string
+    category_gaps: Record<string, {
+      needed: number
+      available: number
+      must: number
+      optional: number
+      gap: number
+      status: string
+    }>
+    total_gap: number
+    has_gap: boolean
+    suggestion: string
+  }
+}
+
+export interface TripPlanDetail extends TripPlanBase {
+  recommendation_summary: RecommendationSummary
+  day_outfit_plans: DayOutfitPlan[]
+  storage_pickup_paths: StoragePickupPath[]
+  available_replacements: Record<string, Array<{
+    garment: Garment
+    score: number
+    recommend_level: string
+    reasons: string[]
+  }>>
+}
+
+export interface TripStats {
+  total_trips: number
+  completed_trips: number
+  total_carried_items: number
+  total_used_items: number
+  unused_carry_rate: number
+  total_wash_after_return: number
+  most_replaced_categories: Array<{
+    category: string
+    count: number
+  }>
+  carry_frequency_by_category: Array<{
+    category: string
+    count: number
+  }>
+}
+
+export interface Statistics {
+  total_garments: number
+  total_washes: number
+  fabric_stats: Array<{
+    fabric: string
+    count: number
+    avg_use_cycle: number
+    avg_wash_count: number
+    avg_months_owned: number
+  }>
+  category_stats: Array<{
+    category: string
+    count: number
+    avg_uses: number
+    avg_washes: number
+  }>
+  deformation_risk_categories: Array<{
+    category: string
+    total_count: number
+    deformation_count: number
+    deformation_rate: number
+  }>
+  idle_garments: Array<{
+    id: number
+    name: string
+    category: string
+    idle_days: number
+    use_count: number
+    last_worn_date: string | null
+  }>
+  wash_frequency_stats: Array<{
+    id: number
+    name: string
+    category: string
+    uses_per_wash: number
+    use_count: number
+    wash_count: number
+  }>
+  monthly_wash_trend: Array<{
+    month: string
+    total_washes: number
+    washes_with_deformation: number
+  }>
+  plan_completion_rate: number
+  overdue_wash_count: number
+  avg_wash_interval_by_fabric: Array<{
+    fabric: string
+    avg_days_between_washes: number
+    wash_count: number
+  }>
+  trip_stats: TripStats | null
 }

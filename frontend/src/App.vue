@@ -45,6 +45,10 @@
             class="reminder-badge"
           />
         </el-menu-item>
+        <el-menu-item index="/trip-plans">
+          <el-icon><Suitcase /></el-icon>
+          <span>出行清单</span>
+        </el-menu-item>
         <el-menu-item index="/statistics">
           <el-icon><DataLine /></el-icon>
           <span>数据统计</span>
@@ -87,6 +91,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { reminderApi, washPlanApi } from '@/api'
+import { Suitcase } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const reminderCount = ref(0)

@@ -211,3 +211,87 @@ class WearRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     garment = relationship("Garment", back_populates="wear_records")
+
+
+class ActivitySceneEnum(str, enum.Enum):
+    DAILY = "日常出行"
+    BUSINESS = "商务出差"
+    VACATION = "度假休闲"
+    SPORTS = "运动健身"
+    PARTY = "聚会派对"
+    OTHER = "其他"
+
+
+class ChangePreferenceEnum(str, enum.Enum):
+    DAILY = "每天更换"
+    EVERY_OTHER = "隔天更换"
+    MINIMAL = "尽量精简"
+    PLENTY = "多备几套"
+
+
+class TripStatusEnum(str, enum.Enum):
+    PLANNING = "规划中"
+    PACKING = "打包中"
+    IN_PROGRESS = "出行中"
+    COMPLETED = "已完成"
+    CANCELLED = "已取消"
+
+
+class PackStatusEnum(str, enum.Enum):
+    UNPACKED = "未打包"
+    PACKED = "已打包"
+    USED = "已使用"
+    RETURNED = "已归位"
+
+
+class RecommendLevelEnum(str, enum.Enum):
+    MUST = "必带"
+    OPTIONAL = "备选"
+    NOT_RECOMMENDED = "不建议携带"
+
+
+class TripPlan(Base):
+    __tablename__ = "trip_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    destination = Column(String(200), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    duration_days = Column(Integer, nullable=False)
+    weather_min = Column(Integer, nullable=True)
+    weather_max = Column(Integer, nullable=True)
+    weather_description = Column(String(500), default="")
+    activity_scenes = Column(String(500), default="")
+    change_preference = Column(Enum(ChangePreferenceEnum), default=ChangePreferenceEnum.DAILY)
+    status = Column(Enum(TripStatusEnum), default=TripStatusEnum.PLANNING)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = relationship("TripItem", back_populates="trip_plan", cascade="all, delete-orphan")
+
+
+class TripItem(Base):
+    __tablename__ = "trip_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trip_plan_id = Column(Integer, ForeignKey("trip_plans.id"), nullable=False)
+    garment_id = Column(Integer, ForeignKey("garments.id"), nullable=False)
+    recommend_level = Column(Enum(RecommendLevelEnum), default=RecommendLevelEnum.OPTIONAL)
+    recommend_reasons = Column(String(1000), default="")
+    is_user_adjusted = Column(Integer, default=0)
+    planned_quantity = Column(Integer, default=1)
+    pack_status = Column(Enum(PackStatusEnum), default=PackStatusEnum.UNPACKED)
+    packed_quantity = Column(Integer, default=0)
+    actual_used = Column(Integer, default=0)
+    need_wash_after = Column(Integer, default=1)
+    replaced_from_garment_id = Column(Integer, ForeignKey("garments.id"), nullable=True)
+    day_assignments = Column(String(500), default="")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    trip_plan = relationship("TripPlan", back_populates="items")
+    garment = relationship("Garment", foreign_keys=[garment_id])
+    replaced_from_garment = relationship("Garment", foreign_keys=[replaced_from_garment_id])

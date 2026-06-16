@@ -1,16 +1,19 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, extract
-from typing import List, Optional
+from sqlalchemy import func, extract, and_, or_
+from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 from collections import defaultdict
+import json
 
 from database import SessionLocal, engine, Base
 from models import (
     StorageZone, Garment, WashRecord, WearRecord,
     CategoryEnum, FabricEnum, WashMethodEnum, DeformationEnum,
-    FABRIC_CARE_RULES
+    FABRIC_CARE_RULES, ActivitySceneEnum, ChangePreferenceEnum,
+    TripStatusEnum, PackStatusEnum, RecommendLevelEnum,
+    TripPlan, TripItem
 )
 import schemas
 
@@ -692,12 +695,14 @@ def get_garment_detail(garment_id: int, db: Session = Depends(get_db)):
         wash_records.append(schemas.WashRecord.model_validate(rd))
 
     next_plan = calculate_wash_plan(garment, db)
+    trip_occupancy = get_garment_trip_occupancy(garment_id, db)
 
     return {
         **garment_to_schema(garment, db).model_dump(),
         "recent_wear_records": wear_records,
         "recent_wash_records": wash_records,
         "next_wash_plan": next_plan,
+        "trip_occupancy": trip_occupancy,
     }
 
 
@@ -860,6 +865,8 @@ def get_statistics(db: Session = Depends(get_db)):
             })
     avg_wash_interval_by_fabric.sort(key=lambda x: x["avg_days_between_washes"])
 
+    trip_stats = calculate_trip_statistics(db)
+
     return {
         "total_garments": total_garments,
         "total_washes": total_washes,
@@ -872,6 +879,7 @@ def get_statistics(db: Session = Depends(get_db)):
         "plan_completion_rate": plan_completion_rate,
         "overdue_wash_count": overdue_wash_count,
         "avg_wash_interval_by_fabric": avg_wash_interval_by_fabric,
+        "trip_stats": trip_stats,
     }
 
 
@@ -882,7 +890,811 @@ def get_enums():
         "fabrics": [{"value": e.value, "name": e.name} for e in FabricEnum],
         "wash_methods": [{"value": e.value, "name": e.name} for e in WashMethodEnum],
         "deformation_levels": [{"value": e.value, "name": e.name} for e in DeformationEnum],
+        "activity_scenes": [{"value": e.value, "name": e.name} for e in ActivitySceneEnum],
+        "change_preferences": [{"value": e.value, "name": e.name} for e in ChangePreferenceEnum],
+        "trip_statuses": [{"value": e.value, "name": e.name} for e in TripStatusEnum],
+        "pack_statuses": [{"value": e.value, "name": e.name} for e in PackStatusEnum],
+        "recommend_levels": [{"value": e.value, "name": e.name} for e in RecommendLevelEnum],
     }
+
+
+def calculate_garment_score(
+    garment: Garment,
+    trip_plan: TripPlan,
+    db: Session
+) -> tuple[float, List[str], bool]:
+    """
+    计算衣物出行推荐分数，返回 (分数, 原因列表, 是否不建议携带)
+    """
+    score = 0.0
+    reasons = []
+    not_recommended = False
+
+    care_rules = get_care_advice(garment.fabric)
+
+    if garment.current_deformation == DeformationEnum.SEVERE:
+        score -= 100
+        reasons.append("严重变形，不建议出行携带")
+        not_recommended = True
+    elif garment.current_deformation == DeformationEnum.MODERATE:
+        score -= 20
+        reasons.append("存在中度变形，出行需谨慎")
+
+    if garment.is_active == 0:
+        score -= 100
+        reasons.append("衣物已停用")
+        not_recommended = True
+
+    all_wears = db.query(WearRecord).filter(WearRecord.garment_id == garment.id).all()
+    all_washes = db.query(WashRecord).filter(WashRecord.garment_id == garment.id).all()
+    last_wash_date = all_washes[-1].wash_date if all_washes else garment.last_wash_date
+
+    wears_since_last_wash = 0
+    if last_wash_date:
+        wears_since_last_wash = len([w for w in all_wears if w.wear_date > last_wash_date])
+    else:
+        wears_since_last_wash = len(all_wears)
+
+    uses_between_wash_map = {
+        CategoryEnum.BRA: 3,
+        CategoryEnum.PANTY: 1,
+        CategoryEnum.PAJAMAS: 7,
+        CategoryEnum.SPORTS: 1,
+        CategoryEnum.SHAPEWEAR: 3,
+        CategoryEnum.THERMAL: 5,
+        CategoryEnum.OTHER: 3,
+    }
+    recommended_uses = uses_between_wash_map.get(garment.category, 3)
+
+    if wears_since_last_wash >= recommended_uses:
+        score -= 30
+        reasons.append(f"已穿着 {wears_since_last_wash} 次，出行前需要洗护")
+    else:
+        score += (recommended_uses - wears_since_last_wash) * 5
+        reasons.append(f"还可穿 {recommended_uses - wears_since_last_wash} 次，状态良好")
+
+    use_ratio = garment.use_count / care_rules["recommended_uses"] if care_rules["recommended_uses"] > 0 else 0
+    if use_ratio >= 0.9:
+        score -= 25
+        reasons.append(f"使用次数已达推荐值的 {int(use_ratio * 100)}%，接近更换周期")
+    elif use_ratio >= 0.7:
+        score += 5
+        reasons.append("使用状态良好，剩余寿命充足")
+    else:
+        score += 15
+        reasons.append("状态较新，适合出行使用")
+
+    if trip_plan.weather_max is not None and trip_plan.weather_min is not None:
+        temp_avg = (trip_plan.weather_max + trip_plan.weather_min) / 2
+        fabric_temp_score = {
+            FabricEnum.COTTON: (15, 28, 10),
+            FabricEnum.SILK: (20, 30, 8),
+            FabricEnum.LACE: (18, 28, 6),
+            FabricEnum.MODAL: (15, 28, 10),
+            FabricEnum.NYLON: (10, 30, 12),
+            FabricEnum.SPANDEX: (15, 30, 10),
+            FabricEnum.POLYESTER: (10, 32, 12),
+            FabricEnum.BAMBOO: (15, 28, 10),
+            FabricEnum.WOOL: (0, 18, 8),
+            FabricEnum.OTHER: (10, 30, 8),
+        }
+        min_temp, max_temp, temp_weight = fabric_temp_score.get(garment.fabric, (10, 30, 8))
+        if min_temp <= temp_avg <= max_temp:
+            score += temp_weight
+            reasons.append(f"{garment.fabric.value}面料适合当前温度区间")
+        elif temp_avg < min_temp:
+            score -= 10
+            reasons.append(f"{garment.fabric.value}面料可能偏薄，注意保暖")
+        else:
+            score -= 10
+            reasons.append(f"{garment.fabric.value}面料可能偏厚，注意透气")
+
+    scenes = [s.strip() for s in trip_plan.activity_scenes.split(",") if s.strip()] if trip_plan.activity_scenes else []
+    category_scene_map = {
+        ActivitySceneEnum.DAILY: [CategoryEnum.BRA, CategoryEnum.PANTY, CategoryEnum.PAJAMAS],
+        ActivitySceneEnum.BUSINESS: [CategoryEnum.BRA, CategoryEnum.PANTY, CategoryEnum.SHAPEWEAR],
+        ActivitySceneEnum.VACATION: [CategoryEnum.BRA, CategoryEnum.PANTY, CategoryEnum.PAJAMAS, CategoryEnum.LACE if hasattr(CategoryEnum, 'LACE') else CategoryEnum.OTHER],
+        ActivitySceneEnum.SPORTS: [CategoryEnum.SPORTS, CategoryEnum.PANTY],
+        ActivitySceneEnum.PARTY: [CategoryEnum.BRA, CategoryEnum.PANTY, CategoryEnum.SHAPEWEAR, CategoryEnum.LACE if hasattr(CategoryEnum, 'LACE') else CategoryEnum.OTHER],
+        ActivitySceneEnum.OTHER: [CategoryEnum.BRA, CategoryEnum.PANTY],
+    }
+
+    scene_match = False
+    for scene in scenes:
+        scene_enum = None
+        for e in ActivitySceneEnum:
+            if e.value == scene:
+                scene_enum = e
+                break
+        if scene_enum and garment.category in category_scene_map.get(scene_enum, []):
+            score += 15
+            reasons.append(f"适合{scene}场景")
+            scene_match = True
+
+    if not scenes:
+        score += 5
+        reasons.append("通用日常场景")
+
+    if garment.fabric in [FabricEnum.SILK, FabricEnum.LACE, FabricEnum.WOOL]:
+        score -= 8
+        reasons.append(f"{garment.fabric.value}面料洗护要求高，出行需小心护理")
+
+    if garment.fabric in [FabricEnum.NYLON, FabricEnum.POLYESTER, FabricEnum.MODAL]:
+        score += 10
+        reasons.append(f"{garment.fabric.value}面料易打理，适合出行")
+
+    deformation_factor = {
+        DeformationEnum.NONE: 1.0,
+        DeformationEnum.SLIGHT: 0.85,
+        DeformationEnum.MODERATE: 0.7,
+        DeformationEnum.SEVERE: 0.5,
+    }.get(garment.current_deformation, 1.0)
+    if deformation_factor < 1.0:
+        score -= (1 - deformation_factor) * 20
+
+    if garment.storage_zone_id is None:
+        score -= 5
+        reasons.append("未分配收纳位置，打包时需注意查找")
+
+    if not_recommended:
+        score = max(score, -999)
+
+    return score, reasons, not_recommended
+
+
+def determine_recommend_level(score: float, not_recommended: bool) -> RecommendLevelEnum:
+    if not_recommended:
+        return RecommendLevelEnum.NOT_RECOMMENDED
+    if score >= 30:
+        return RecommendLevelEnum.MUST
+    elif score >= 0:
+        return RecommendLevelEnum.OPTIONAL
+    else:
+        return RecommendLevelEnum.NOT_RECOMMENDED
+
+
+def calculate_change_gap(
+    trip_plan: TripPlan,
+    items: List[TripItem],
+    db: Session
+) -> dict:
+    """
+    计算换洗缺口分析
+    """
+    duration = trip_plan.duration_days
+    change_pref = trip_plan.change_preference
+
+    changes_per_day = {
+        ChangePreferenceEnum.DAILY: 1.0,
+        ChangePreferenceEnum.EVERY_OTHER: 0.5,
+        ChangePreferenceEnum.MINIMAL: 0.3,
+        ChangePreferenceEnum.PLENTY: 1.5,
+    }.get(change_pref, 1.0)
+
+    category_needs = defaultdict(lambda: {"needed": 0, "available": 0, "must": 0, "optional": 0})
+
+    must_items = [item for item in items if item.recommend_level == RecommendLevelEnum.MUST]
+    optional_items = [item for item in items if item.recommend_level == RecommendLevelEnum.OPTIONAL]
+
+    for item in must_items:
+        garment = db.query(Garment).filter(Garment.id == item.garment_id).first()
+        if garment:
+            cat = garment.category.value
+            category_needs[cat]["must"] += item.planned_quantity
+            category_needs[cat]["available"] += item.planned_quantity
+
+    for item in optional_items:
+        garment = db.query(Garment).filter(Garment.id == item.garment_id).first()
+        if garment:
+            cat = garment.category.value
+            category_needs[cat]["optional"] += item.planned_quantity
+            category_needs[cat]["available"] += item.planned_quantity
+
+    uses_between_wash_map = {
+        CategoryEnum.BRA.value: 3,
+        CategoryEnum.PANTY.value: 1,
+        CategoryEnum.PAJAMAS.value: 7,
+        CategoryEnum.SPORTS.value: 1,
+        CategoryEnum.SHAPEWEAR.value: 3,
+        CategoryEnum.THERMAL.value: 5,
+        CategoryEnum.OTHER.value: 3,
+    }
+
+    base_needs = {
+        CategoryEnum.BRA.value: 2,
+        CategoryEnum.PANTY.value: duration,
+        CategoryEnum.PAJAMAS.value: 1,
+        CategoryEnum.SPORTS.value: 1,
+        CategoryEnum.SHAPEWEAR.value: 1,
+        CategoryEnum.THERMAL.value: 1,
+        CategoryEnum.OTHER.value: 1,
+    }
+
+    for cat, data in category_needs.items():
+        uses_per_wash = uses_between_wash_map.get(cat, 3)
+        base = base_needs.get(cat, 1)
+        needed = max(base, int(duration * changes_per_day / uses_per_wash) + 1)
+        data["needed"] = needed
+
+    gaps = {}
+    for cat, data in category_needs.items():
+        gap = data["needed"] - data["available"]
+        gaps[cat] = {
+            "needed": data["needed"],
+            "available": data["available"],
+            "must": data["must"],
+            "optional": data["optional"],
+            "gap": max(0, gap),
+            "status": "充足" if gap <= 0 else ("略有不足" if gap <= 2 else "缺口较大")
+        }
+
+    total_gap = sum(max(0, g["gap"]) for g in gaps.values())
+    has_gap = total_gap > 0
+
+    return {
+        "duration_days": duration,
+        "change_preference": change_pref.value,
+        "category_gaps": gaps,
+        "total_gap": total_gap,
+        "has_gap": has_gap,
+        "suggestion": "携带数量充足" if not has_gap else f"存在 {total_gap} 件换洗缺口，建议补充衣物",
+    }
+
+
+def generate_day_outfit_plans(
+    trip_plan: TripPlan,
+    items: List[TripItem],
+    db: Session
+) -> List[dict]:
+    """
+    生成按天穿搭安排
+    """
+    duration = trip_plan.duration_days
+    start_date = trip_plan.start_date
+
+    garment_items = []
+    for item in items:
+        if item.recommend_level in [RecommendLevelEnum.MUST, RecommendLevelEnum.OPTIONAL]:
+            garment = db.query(Garment).filter(Garment.id == item.garment_id).first()
+            if garment:
+                garment_items.append({
+                    "item": item,
+                    "garment": garment,
+                    "uses_remaining": item.planned_quantity * 2,
+                })
+
+    day_plans = []
+    for day_idx in range(duration):
+        current_date = start_date + timedelta(days=day_idx)
+        day_garments = []
+
+        categories_needed = [CategoryEnum.BRA, CategoryEnum.PANTY]
+        if day_idx % 2 == 0:
+            categories_needed.append(CategoryEnum.PAJAMAS)
+
+        scenes = [s.strip() for s in trip_plan.activity_scenes.split(",") if s.strip()] if trip_plan.activity_scenes else []
+        if ActivitySceneEnum.SPORTS.value in scenes and day_idx % 2 == 0:
+            categories_needed.append(CategoryEnum.SPORTS)
+        if ActivitySceneEnum.BUSINESS.value in scenes or ActivitySceneEnum.PARTY.value in scenes:
+            categories_needed.append(CategoryEnum.SHAPEWEAR)
+
+        for cat in categories_needed:
+            candidates = [
+                gi for gi in garment_items
+                if gi["garment"].category == cat and gi["uses_remaining"] > 0
+            ]
+            if candidates:
+                candidates.sort(key=lambda x: x["uses_remaining"], reverse=True)
+                selected = candidates[0]
+                selected["uses_remaining"] -= 1
+                day_garments.append(garment_to_schema(selected["garment"], db))
+
+        day_plans.append({
+            "day_index": day_idx + 1,
+            "date": current_date,
+            "garments": day_garments,
+        })
+
+    return day_plans
+
+
+def generate_storage_pickup_paths(
+    items: List[TripItem],
+    db: Session
+) -> List[dict]:
+    """
+    生成收纳取物路径
+    """
+    zone_items = defaultdict(list)
+    unassigned = []
+
+    for item in items:
+        if item.recommend_level in [RecommendLevelEnum.MUST, RecommendLevelEnum.OPTIONAL] and item.pack_status != PackStatusEnum.PACKED:
+            garment = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.id == item.garment_id).first()
+            if garment:
+                item_info = {
+                    "id": garment.id,
+                    "name": garment.name,
+                    "category": garment.category.value,
+                    "color": garment.color,
+                    "quantity": item.planned_quantity,
+                    "recommend_level": item.recommend_level.value,
+                    "pack_status": item.pack_status.value,
+                }
+                if garment.storage_zone:
+                    zone_items[garment.storage_zone.id].append({
+                        "zone": garment.storage_zone,
+                        "item": item_info,
+                    })
+                else:
+                    unassigned.append(item_info)
+
+    paths = []
+    for zone_id, items_list in zone_items.items():
+        zone = items_list[0]["zone"]
+        garment_infos = [i["item"] for i in items_list]
+        paths.append({
+            "storage_zone_id": zone.id,
+            "storage_zone_name": zone.name,
+            "garments": garment_infos,
+            "total_items": len(garment_infos),
+        })
+
+    paths.sort(key=lambda x: x["storage_zone_name"])
+
+    if unassigned:
+        paths.append({
+            "storage_zone_id": None,
+            "storage_zone_name": "未分区衣物",
+            "garments": unassigned,
+            "total_items": len(unassigned),
+        })
+
+    return paths
+
+
+def get_available_replacements(
+    trip_plan: TripPlan,
+    current_items: List[TripItem],
+    db: Session
+) -> dict:
+    """
+    获取可替换的衣物推荐
+    """
+    current_garment_ids = [item.garment_id for item in current_items]
+
+    active_garments = (
+        db.query(Garment)
+        .options(joinedload(Garment.storage_zone))
+        .filter(
+            Garment.is_active == 1,
+            Garment.id.notin_(current_garment_ids)
+        )
+        .all()
+    )
+
+    replacements = defaultdict(list)
+
+    for garment in active_garments:
+        score, reasons, not_recommended = calculate_garment_score(garment, trip_plan, db)
+        if not_recommended:
+            continue
+        level = determine_recommend_level(score, not_recommended)
+
+        replacement_info = {
+            "garment": garment_to_schema(garment, db),
+            "score": round(score, 2),
+            "recommend_level": level.value,
+            "reasons": reasons,
+        }
+
+        replacements[garment.category.value].append(replacement_info)
+
+    for cat in replacements:
+        replacements[cat].sort(key=lambda x: x["score"], reverse=True)
+
+    return dict(replacements)
+
+
+def generate_recommendations(
+    trip_plan: TripPlan,
+    db: Session
+) -> dict:
+    """
+    生成完整的出行推荐清单
+    """
+    active_garments = (
+        db.query(Garment)
+        .options(joinedload(Garment.storage_zone))
+        .filter(Garment.is_active == 1)
+        .all()
+    )
+
+    scored_garments = []
+    for garment in active_garments:
+        score, reasons, not_recommended = calculate_garment_score(garment, trip_plan, db)
+        level = determine_recommend_level(score, not_recommended)
+        scored_garments.append({
+            "garment": garment,
+            "score": score,
+            "reasons": reasons,
+            "not_recommended": not_recommended,
+            "level": level,
+        })
+
+    scored_garments.sort(key=lambda x: x["score"], reverse=True)
+
+    trip_items = []
+    for sg in scored_garments:
+        trip_item = TripItem(
+            trip_plan_id=trip_plan.id,
+            garment_id=sg["garment"].id,
+            recommend_level=sg["level"],
+            recommend_reasons="；".join(sg["reasons"]),
+            is_user_adjusted=0,
+            planned_quantity=1,
+            pack_status=PackStatusEnum.UNPACKED,
+            packed_quantity=0,
+            actual_used=0,
+            need_wash_after=1,
+        )
+        trip_items.append(trip_item)
+
+    must_carry = [item for item in trip_items if item.recommend_level == RecommendLevelEnum.MUST]
+    optional = [item for item in trip_items if item.recommend_level == RecommendLevelEnum.OPTIONAL]
+    not_recommended = [item for item in trip_items if item.recommend_level == RecommendLevelEnum.NOT_RECOMMENDED]
+
+    category_estimated_wears = defaultdict(int)
+    for item in must_carry + optional:
+        garment = next((sg["garment"] for sg in scored_garments if sg["garment"].id == item.garment_id), None)
+        if garment:
+            uses_between_wash = {
+                CategoryEnum.BRA: 3,
+                CategoryEnum.PANTY: 1,
+                CategoryEnum.PAJAMAS: 7,
+                CategoryEnum.SPORTS: 1,
+                CategoryEnum.SHAPEWEAR: 3,
+                CategoryEnum.THERMAL: 5,
+                CategoryEnum.OTHER: 3,
+            }.get(garment.category, 3)
+            category_estimated_wears[garment.category.value] += item.planned_quantity * uses_between_wash
+
+    total_estimated_wears = sum(category_estimated_wears.values())
+    estimated_wash_after_return = len(must_carry) + len(optional)
+
+    return {
+        "scored_garments": scored_garments,
+        "trip_items": trip_items,
+        "must_carry": must_carry,
+        "optional": optional,
+        "not_recommended": not_recommended,
+        "total_estimated_wears": total_estimated_wears,
+        "estimated_wash_after_return": estimated_wash_after_return,
+    }
+
+
+def trip_item_to_schema(item: TripItem, db: Session) -> schemas.TripItem:
+    garment = db.query(Garment).options(joinedload(Garment.storage_zone)).filter(Garment.id == item.garment_id).first()
+    replaced_from = None
+    if item.replaced_from_garment_id:
+        replaced_from = db.query(Garment).filter(Garment.id == item.replaced_from_garment_id).first()
+
+    item_dict = {c.name: getattr(item, c.name) for c in item.__table__.columns}
+    item_dict["garment"] = garment_to_schema(garment, db) if garment else None
+    item_dict["replaced_from_garment"] = garment_to_schema(replaced_from, db) if replaced_from else None
+
+    return schemas.TripItem.model_validate(item_dict)
+
+
+def trip_plan_to_schema(plan: TripPlan, db: Session) -> schemas.TripPlan:
+    plan_dict = {c.name: getattr(plan, c.name) for c in plan.__table__.columns}
+    plan_dict["items"] = [trip_item_to_schema(item, db) for item in plan.items]
+    return schemas.TripPlan.model_validate(plan_dict)
+
+
+def get_garment_trip_occupancy(garment_id: int, db: Session) -> List[dict]:
+    """
+    获取衣物近期的出行占用情况
+    """
+    today = date.today()
+    thirty_days_later = today + timedelta(days=30)
+
+    trip_items = (
+        db.query(TripItem)
+        .join(TripPlan)
+        .filter(
+            TripItem.garment_id == garment_id,
+            TripPlan.status.in_([TripStatusEnum.PLANNING, TripStatusEnum.PACKING, TripStatusEnum.IN_PROGRESS]),
+            TripPlan.end_date >= today,
+            TripPlan.start_date <= thirty_days_later,
+        )
+        .options(joinedload(TripItem.trip_plan))
+        .all()
+    )
+
+    occupancy = []
+    for ti in trip_items:
+        occupancy.append({
+            "trip_id": ti.trip_plan.id,
+            "trip_name": ti.trip_plan.name,
+            "destination": ti.trip_plan.destination,
+            "start_date": ti.trip_plan.start_date.isoformat(),
+            "end_date": ti.trip_plan.end_date.isoformat(),
+            "status": ti.trip_plan.status.value,
+            "pack_status": ti.pack_status.value,
+        })
+
+    return occupancy
+
+
+def calculate_trip_statistics(db: Session) -> dict:
+    """
+    计算出行相关统计指标
+    """
+    all_trips = db.query(TripPlan).all()
+
+    if not all_trips:
+        return {
+            "total_trips": 0,
+            "completed_trips": 0,
+            "total_carried_items": 0,
+            "total_used_items": 0,
+            "unused_carry_rate": 0,
+            "total_wash_after_return": 0,
+            "most_replaced_categories": [],
+            "carry_frequency_by_category": [],
+        }
+
+    total_trips = len(all_trips)
+    completed_trips = len([t for t in all_trips if t.status == TripStatusEnum.COMPLETED])
+
+    all_trip_items = db.query(TripItem).all()
+
+    total_carried = sum(
+        ti.planned_quantity for ti in all_trip_items
+        if ti.recommend_level in [RecommendLevelEnum.MUST, RecommendLevelEnum.OPTIONAL]
+    )
+
+    total_used = sum(
+        ti.actual_used for ti in all_trip_items
+        if ti.recommend_level in [RecommendLevelEnum.MUST, RecommendLevelEnum.OPTIONAL]
+    )
+
+    unused_rate = round((1 - total_used / total_carried) * 100, 1) if total_carried > 0 else 0
+
+    total_wash_after = sum(
+        ti.need_wash_after for ti in all_trip_items
+        if ti.recommend_level in [RecommendLevelEnum.MUST, RecommendLevelEnum.OPTIONAL]
+        and ti.trip_plan.status == TripStatusEnum.COMPLETED
+    )
+
+    replaced_count = defaultdict(int)
+    carry_count = defaultdict(int)
+
+    for ti in all_trip_items:
+        garment = db.query(Garment).filter(Garment.id == ti.garment_id).first()
+        if garment:
+            carry_count[garment.category.value] += ti.planned_quantity
+            if ti.replaced_from_garment_id:
+                replaced_count[garment.category.value] += 1
+
+    most_replaced = sorted(replaced_count.items(), key=lambda x: x[1], reverse=True)[:5]
+    carry_freq = sorted(carry_count.items(), key=lambda x: x[1], reverse=True)
+
+    return {
+        "total_trips": total_trips,
+        "completed_trips": completed_trips,
+        "total_carried_items": total_carried,
+        "total_used_items": total_used,
+        "unused_carry_rate": unused_rate,
+        "total_wash_after_return": total_wash_after,
+        "most_replaced_categories": [
+            {"category": cat, "count": count} for cat, count in most_replaced
+        ],
+        "carry_frequency_by_category": [
+            {"category": cat, "count": count} for cat, count in carry_freq
+        ],
+    }
+
+
+@app.post("/api/trip-plans", response_model=schemas.TripPlan)
+def create_trip_plan(plan: schemas.TripPlanCreate, db: Session = Depends(get_db)):
+    db_plan = TripPlan(**plan.model_dump())
+    db.add(db_plan)
+    db.commit()
+    db.refresh(db_plan)
+
+    rec_result = generate_recommendations(db_plan, db)
+    for item in rec_result["trip_items"]:
+        db.add(item)
+    db.commit()
+    db.refresh(db_plan)
+
+    return trip_plan_to_schema(db_plan, db)
+
+
+@app.get("/api/trip-plans", response_model=List[schemas.TripPlanSummary])
+def list_trip_plans(
+    status: Optional[TripStatusEnum] = None,
+    db: Session = Depends(get_db)
+):
+    query = db.query(TripPlan)
+    if status:
+        query = query.filter(TripPlan.status == status)
+    plans = query.order_by(TripPlan.created_at.desc()).all()
+
+    result = []
+    for plan in plans:
+        items_count = len(plan.items)
+        packed_count = len([i for i in plan.items if i.pack_status == PackStatusEnum.PACKED])
+        must_count = len([i for i in plan.items if i.recommend_level == RecommendLevelEnum.MUST])
+
+        result.append(schemas.TripPlanSummary(
+            id=plan.id,
+            name=plan.name,
+            destination=plan.destination,
+            start_date=plan.start_date,
+            end_date=plan.end_date,
+            duration_days=plan.duration_days,
+            status=plan.status,
+            items_count=items_count,
+            packed_count=packed_count,
+            must_count=must_count,
+            created_at=plan.created_at,
+        ))
+    return result
+
+
+@app.get("/api/trip-plans/{plan_id}", response_model=schemas.TripPlanDetail)
+def get_trip_plan(plan_id: int, db: Session = Depends(get_db)):
+    plan = db.query(TripPlan).filter(TripPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="出行计划不存在")
+
+    items = [trip_item_to_schema(item, db) for item in plan.items]
+
+    must_carry = [item for item in items if item.recommend_level == RecommendLevelEnum.MUST]
+    optional = [item for item in items if item.recommend_level == RecommendLevelEnum.OPTIONAL]
+    not_recommended = [item for item in items if item.recommend_level == RecommendLevelEnum.NOT_RECOMMENDED]
+
+    total_estimated_wears = 0
+    estimated_wash_after_return = 0
+    for item in must_carry + optional:
+        estimated_wash_after_return += item.planned_quantity
+        total_estimated_wears += item.planned_quantity * 2
+
+    change_gap = calculate_change_gap(plan, plan.items, db)
+    day_outfit_plans = generate_day_outfit_plans(plan, plan.items, db)
+    storage_pickup_paths = generate_storage_pickup_paths(plan.items, db)
+    available_replacements = get_available_replacements(plan, plan.items, db)
+
+    plan_dict = {c.name: getattr(plan, c.name) for c in plan.__table__.columns}
+
+    return {
+        **plan_dict,
+        "items": items,
+        "recommendation_summary": {
+            "must_carry": must_carry,
+            "optional": optional,
+            "not_recommended": not_recommended,
+            "total_estimated_wears": total_estimated_wears,
+            "estimated_wash_after_return": estimated_wash_after_return,
+            "change_gap_analysis": change_gap,
+        },
+        "day_outfit_plans": day_outfit_plans,
+        "storage_pickup_paths": storage_pickup_paths,
+        "available_replacements": available_replacements,
+    }
+
+
+@app.put("/api/trip-plans/{plan_id}", response_model=schemas.TripPlan)
+def update_trip_plan(plan_id: int, plan_data: schemas.TripPlanUpdate, db: Session = Depends(get_db)):
+    plan = db.query(TripPlan).filter(TripPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="出行计划不存在")
+
+    update_data = plan_data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(plan, key, value)
+    db.commit()
+    db.refresh(plan)
+
+    return trip_plan_to_schema(plan, db)
+
+
+@app.post("/api/trip-plans/{plan_id}/regenerate", response_model=schemas.TripPlanDetail)
+def regenerate_recommendations(plan_id: int, db: Session = Depends(get_db)):
+    plan = db.query(TripPlan).filter(TripPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="出行计划不存在")
+
+    db.query(TripItem).filter(TripItem.trip_plan_id == plan_id).delete()
+    db.commit()
+
+    rec_result = generate_recommendations(plan, db)
+    for item in rec_result["trip_items"]:
+        db.add(item)
+    db.commit()
+    db.refresh(plan)
+
+    return get_trip_plan(plan_id, db)
+
+
+@app.delete("/api/trip-plans/{plan_id}")
+def delete_trip_plan(plan_id: int, db: Session = Depends(get_db)):
+    plan = db.query(TripPlan).filter(TripPlan.id == plan_id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="出行计划不存在")
+    db.delete(plan)
+    db.commit()
+    return {"message": "出行计划已删除"}
+
+
+@app.put("/api/trip-items/{item_id}", response_model=schemas.TripItem)
+def update_trip_item(item_id: int, item_data: schemas.TripItemUpdate, db: Session = Depends(get_db)):
+    item = db.query(TripItem).filter(TripItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="出行物品不存在")
+
+    update_data = item_data.model_dump(exclude_unset=True)
+    if "pack_status" in update_data or "packed_quantity" in update_data:
+        update_data["is_user_adjusted"] = 1
+    for key, value in update_data.items():
+        setattr(item, key, value)
+    db.commit()
+    db.refresh(item)
+
+    return trip_item_to_schema(item, db)
+
+
+@app.put("/api/trip-items/{item_id}/toggle-pack", response_model=schemas.TripItem)
+def toggle_pack_status(item_id: int, db: Session = Depends(get_db)):
+    item = db.query(TripItem).filter(TripItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="出行物品不存在")
+
+    if item.pack_status == PackStatusEnum.PACKED:
+        item.pack_status = PackStatusEnum.UNPACKED
+        item.packed_quantity = 0
+    else:
+        item.pack_status = PackStatusEnum.PACKED
+        item.packed_quantity = item.planned_quantity
+
+    item.is_user_adjusted = 1
+    db.commit()
+    db.refresh(item)
+
+    return trip_item_to_schema(item, db)
+
+
+@app.post("/api/trip-items/{item_id}/replace", response_model=schemas.TripItem)
+def replace_trip_item(item_id: int, new_garment_id: int, db: Session = Depends(get_db)):
+    item = db.query(TripItem).filter(TripItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="出行物品不存在")
+
+    new_garment = db.query(Garment).filter(Garment.id == new_garment_id).first()
+    if not new_garment:
+        raise HTTPException(status_code=404, detail="替换衣物不存在")
+
+    old_garment_id = item.garment_id
+    item.garment_id = new_garment_id
+    item.replaced_from_garment_id = old_garment_id
+    item.is_user_adjusted = 1
+    item.pack_status = PackStatusEnum.UNPACKED
+    item.packed_quantity = 0
+
+    plan = db.query(TripPlan).filter(TripPlan.id == item.trip_plan_id).first()
+    if plan:
+        score, reasons, not_recommended = calculate_garment_score(new_garment, plan, db)
+        level = determine_recommend_level(score, not_recommended)
+        item.recommend_level = level
+        item.recommend_reasons = "；".join(reasons) + f"（用户从原衣物ID {old_garment_id} 替换）"
+
+    db.commit()
+    db.refresh(item)
+
+    return trip_item_to_schema(item, db)
 
 
 if __name__ == "__main__":

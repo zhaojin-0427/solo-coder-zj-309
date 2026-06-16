@@ -33,6 +33,15 @@
             >
               {{ detail.replacement_status.urgency }}
             </el-tag>
+            <el-tag
+              v-if="detail.trip_occupancy && detail.trip_occupancy.length > 0"
+              type="warning"
+              size="small"
+              effect="dark"
+            >
+              <el-icon><Suitcase /></el-icon>
+              近期出行占用 ({{ detail.trip_occupancy.length }})
+            </el-tag>
           </div>
         </div>
       </div>
@@ -216,6 +225,40 @@
           <el-empty v-else description="暂无洗护记录" />
         </el-tab-pane>
 
+        <el-tab-pane label="出行占用" name="trip">
+          <div v-if="detail.trip_occupancy && detail.trip_occupancy.length > 0" class="trip-section">
+            <div class="trip-alert" v-if="hasInProgressTrip">
+              <el-icon color="#e6a23c"><WarningFilled /></el-icon>
+              <span>该衣物正在被出行计划占用，请确认是否可用</span>
+            </div>
+            <div class="trip-list">
+              <div v-for="trip in detail.trip_occupancy" :key="trip.trip_id" class="trip-item">
+                <div class="trip-item-header">
+                  <span class="trip-name">{{ trip.trip_name }}</span>
+                  <el-tag size="small" :type="getTripStatusType(trip.status)" effect="dark">
+                    {{ trip.status }}
+                  </el-tag>
+                </div>
+                <div class="trip-item-meta">
+                  <span class="trip-meta-item">
+                    <el-icon><LocationFilled /></el-icon>
+                    {{ trip.destination }}
+                  </span>
+                  <span class="trip-meta-item">
+                    <el-icon><Calendar /></el-icon>
+                    {{ trip.start_date }} 至 {{ trip.end_date }}
+                  </span>
+                  <span class="trip-meta-item">
+                    <el-icon><Box /></el-icon>
+                    {{ trip.pack_status }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <el-empty v-else description="近期无出行占用" />
+        </el-tab-pane>
+
         <el-tab-pane label="更换评估" name="replacement">
           <div v-if="detail.replacement_status" class="replacement-section">
             <el-progress
@@ -358,13 +401,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, type FormInstance, type FormRules } from 'vue'
+import { ref, reactive, watch, computed, type FormInstance, type FormRules } from 'vue'
 import { ElMessage } from 'element-plus'
 import { garmentApi, enumApi, washRecordApi, wearRecordApi } from '@/api'
 import type { GarmentDetail, Enums } from '@/types'
 import {
   Loading, Box, Brush, Sunny, Document, Lightning, Timer,
-  Calendar, Warning, InfoFilled, CaretRight
+  Calendar, Warning, WarningFilled, InfoFilled, CaretRight,
+  Suitcase, LocationFilled
 } from '@element-plus/icons-vue'
 
 const props = defineProps<{
@@ -487,6 +531,24 @@ const getProgressColor = (urgency: string) => {
   if (urgency === '建议更换') return '#ffa726'
   return '#42a5f5'
 }
+
+const getTripStatusType = (status: string) => {
+  const map: Record<string, string> = {
+    '规划中': '',
+    '打包中': 'warning',
+    '出行中': 'primary',
+    '已完成': 'success',
+    '已取消': 'info'
+  }
+  return map[status] || ''
+}
+
+const hasInProgressTrip = computed(() => {
+  if (!detail.value?.trip_occupancy) return false
+  return detail.value.trip_occupancy.some(t => 
+    t.status === '出行中' || t.status === '打包中'
+  )
+})
 
 const handleOpenWash = () => {
   Object.assign(washForm, {
@@ -744,5 +806,66 @@ const submitWear = async () => {
   margin: 4px 0;
   font-size: 13px;
   color: #8d6e63;
+}
+
+.trip-section {
+  padding: 4px 0;
+}
+
+.trip-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #fdf6ec;
+  border: 1px solid #f5dab1;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  color: #e6a23c;
+  font-size: 14px;
+}
+
+.trip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.trip-item {
+  padding: 16px;
+  background: #fafafa;
+  border-radius: 12px;
+  border-left: 4px solid #ec407a;
+}
+
+.trip-item-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.trip-name {
+  font-weight: 600;
+  color: #5d4037;
+  font-size: 15px;
+}
+
+.trip-item-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trip-meta-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #8d6e63;
+  font-size: 13px;
+}
+
+.trip-meta-item .el-icon {
+  color: #ec407a;
 }
 </style>

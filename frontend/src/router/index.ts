@@ -36,6 +36,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '更换提醒', icon: 'Bell' }
   },
   {
+    path: '/trip-plans',
+    name: 'trip-plans',
+    component: () => import('@/views/TripPlans.vue'),
+    meta: { title: '出行清单', icon: 'Suitcase' }
+  },
+  {
     path: '/statistics',
     name: 'statistics',
     component: () => import('@/views/Statistics.vue'),

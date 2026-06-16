@@ -1,7 +1,11 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import date, datetime
-from models import CategoryEnum, FabricEnum, WashMethodEnum, DeformationEnum
+from models import (
+    CategoryEnum, FabricEnum, WashMethodEnum, DeformationEnum,
+    ActivitySceneEnum, ChangePreferenceEnum, TripStatusEnum,
+    PackStatusEnum, RecommendLevelEnum
+)
 
 
 class StorageZoneBase(BaseModel):
@@ -176,3 +180,135 @@ class StatisticsResponse(BaseModel):
     plan_completion_rate: float
     overdue_wash_count: int
     avg_wash_interval_by_fabric: List[dict]
+    trip_stats: Optional[dict] = None
+
+
+class TripPlanBase(BaseModel):
+    name: str = Field(..., max_length=200)
+    destination: str = Field(..., max_length=200)
+    start_date: date
+    end_date: date
+    duration_days: int
+    weather_min: Optional[int] = None
+    weather_max: Optional[int] = None
+    weather_description: Optional[str] = ""
+    activity_scenes: Optional[str] = ""
+    change_preference: ChangePreferenceEnum = ChangePreferenceEnum.DAILY
+    status: TripStatusEnum = TripStatusEnum.PLANNING
+    notes: Optional[str] = ""
+
+
+class TripPlanCreate(TripPlanBase):
+    pass
+
+
+class TripPlanUpdate(BaseModel):
+    name: Optional[str] = None
+    destination: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    duration_days: Optional[int] = None
+    weather_min: Optional[int] = None
+    weather_max: Optional[int] = None
+    weather_description: Optional[str] = None
+    activity_scenes: Optional[str] = None
+    change_preference: Optional[ChangePreferenceEnum] = None
+    status: Optional[TripStatusEnum] = None
+    notes: Optional[str] = None
+
+
+class TripItemBase(BaseModel):
+    garment_id: int
+    recommend_level: RecommendLevelEnum = RecommendLevelEnum.OPTIONAL
+    recommend_reasons: Optional[str] = ""
+    planned_quantity: int = 1
+    pack_status: PackStatusEnum = PackStatusEnum.UNPACKED
+    packed_quantity: int = 0
+    day_assignments: Optional[str] = ""
+    notes: Optional[str] = ""
+
+
+class TripItemCreate(TripItemBase):
+    pass
+
+
+class TripItemUpdate(BaseModel):
+    recommend_level: Optional[RecommendLevelEnum] = None
+    planned_quantity: Optional[int] = None
+    pack_status: Optional[PackStatusEnum] = None
+    packed_quantity: Optional[int] = None
+    actual_used: Optional[int] = None
+    need_wash_after: Optional[int] = None
+    replaced_from_garment_id: Optional[int] = None
+    day_assignments: Optional[str] = None
+    notes: Optional[str] = None
+    is_user_adjusted: Optional[int] = None
+
+
+class TripItem(TripItemBase):
+    id: int
+    trip_plan_id: int
+    garment: Optional[Garment] = None
+    is_user_adjusted: int = 0
+    actual_used: int = 0
+    need_wash_after: int = 1
+    replaced_from_garment_id: Optional[int] = None
+    replaced_from_garment: Optional[Garment] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TripPlan(TripPlanBase):
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    items: List[TripItem] = []
+
+    class Config:
+        from_attributes = True
+
+
+class TripPlanSummary(BaseModel):
+    id: int
+    name: str
+    destination: str
+    start_date: date
+    end_date: date
+    duration_days: int
+    status: TripStatusEnum
+    items_count: int = 0
+    packed_count: int = 0
+    must_count: int = 0
+    created_at: datetime
+
+
+class DayOutfitPlan(BaseModel):
+    day_index: int
+    date: date
+    garments: List[Garment] = []
+
+
+class StoragePickupPath(BaseModel):
+    storage_zone_id: Optional[int]
+    storage_zone_name: str
+    garments: List[dict] = []
+    total_items: int = 0
+
+
+class RecommendationSummary(BaseModel):
+    must_carry: List[TripItem] = []
+    optional: List[TripItem] = []
+    not_recommended: List[TripItem] = []
+    total_estimated_wears: int = 0
+    estimated_wash_after_return: int = 0
+    change_gap_analysis: dict = {}
+
+
+class TripPlanDetail(TripPlan):
+    recommendation_summary: RecommendationSummary
+    day_outfit_plans: List[DayOutfitPlan] = []
+    storage_pickup_paths: List[StoragePickupPath] = []
+    available_replacements: dict = {}

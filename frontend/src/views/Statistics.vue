@@ -12,7 +12,7 @@
     </div>
 
     <el-row :gutter="20" style="margin-bottom: 24px">
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-1">
           <div class="kpi-icon">
             <el-icon :size="28"><Female /></el-icon>
@@ -23,7 +23,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-2">
           <div class="kpi-icon">
             <el-icon :size="28"><Brush /></el-icon>
@@ -34,7 +34,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-3">
           <div class="kpi-icon">
             <el-icon :size="28"><Warning /></el-icon>
@@ -45,7 +45,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-4">
           <div class="kpi-icon">
             <el-icon :size="28"><Timer /></el-icon>
@@ -54,9 +54,10 @@
             <div class="kpi-value">{{ avgWashPerGarment }}</div>
             <div class="kpi-label">平均洗护/件</div>
           </div>
+
         </div>
       </el-col>
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-5">
           <div class="kpi-icon">
             <el-icon :size="28"><CircleCheckFilled /></el-icon>
@@ -67,7 +68,7 @@
           </div>
         </div>
       </el-col>
-      <el-col :span="4">
+      <el-col :span="3">
         <div class="kpi-card kpi-6">
           <div class="kpi-icon">
             <el-icon :size="28"><AlarmClock /></el-icon>
@@ -75,6 +76,89 @@
           <div>
             <div class="kpi-value">{{ stats?.overdue_wash_count || 0 }}</div>
             <div class="kpi-label">逾期洗护</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="3">
+        <div class="kpi-card kpi-trip-1">
+          <div class="kpi-icon">
+            <el-icon :size="28"><Suitcase /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.trip_stats?.total_trips || 0 }}</div>
+            <div class="kpi-label">出行计划</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="3">
+        <div class="kpi-card kpi-trip-2">
+          <div class="kpi-icon">
+            <el-icon :size="28"><TrendCharts /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.trip_stats?.unused_carry_rate || 0 }}%</div>
+            <div class="kpi-label">未使用携带率</div>
+          </div>
+        </div>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" style="margin-bottom: 24px" v-if="stats?.trip_stats">
+      <el-col :span="4">
+        <div class="kpi-card kpi-trip-3">
+          <div class="kpi-icon">
+            <el-icon :size="28"><Goods /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.trip_stats?.total_carried_items || 0 }}</div>
+            <div class="kpi-label">累计携带件次</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="4">
+        <div class="kpi-card kpi-trip-4">
+          <div class="kpi-icon">
+            <el-icon :size="28"><CircleCheck /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.trip_stats?.total_used_items || 0 }}</div>
+            <div class="kpi-label">实际使用件次</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="4">
+        <div class="kpi-card kpi-trip-5">
+          <div class="kpi-icon">
+            <el-icon :size="28"><Brush /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-value">{{ stats?.trip_stats?.total_wash_after_return || 0 }}</div>
+            <div class="kpi-label">返程待洗护</div>
+          </div>
+        </div>
+      </el-col>
+      <el-col :span="12">
+        <div class="kpi-card kpi-trip-6">
+          <div class="kpi-icon">
+            <el-icon :size="28"><Trophy /></el-icon>
+          </div>
+          <div>
+            <div class="kpi-label">最常被替换品类</div>
+            <div class="replaced-categories">
+              <el-tag
+                v-for="cat in stats?.trip_stats?.most_replaced_categories?.slice(0, 5)"
+                :key="cat.category"
+                size="large"
+                type="danger"
+                effect="dark"
+                class="replaced-tag"
+              >
+                {{ cat.category }} ({{ cat.count }}次)
+              </el-tag>
+              <span v-if="!stats?.trip_stats?.most_replaced_categories?.length" class="no-data">
+                暂无数据
+              </span>
+            </div>
           </div>
         </div>
       </el-col>
@@ -130,6 +214,27 @@
             各面料平均洗护间隔（天）
           </h3>
           <div ref="avgIntervalChartRef" class="chart-box"></div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="20" style="margin-top: 20px" v-if="stats?.trip_stats">
+      <el-col :span="12">
+        <el-card shadow="never" class="stats-card chart-card">
+          <h3 class="chart-title">
+            <el-icon><Suitcase /></el-icon>
+            各品类出行携带频次
+          </h3>
+          <div ref="carryFreqChartRef" class="chart-box"></div>
+        </el-card>
+      </el-col>
+      <el-col :span="12">
+        <el-card shadow="never" class="stats-card chart-card">
+          <h3 class="chart-title">
+            <el-icon><Refresh /></el-icon>
+            各品类被替换次数
+          </h3>
+          <div ref="replacedChartRef" class="chart-box"></div>
         </el-card>
       </el-col>
     </el-row>
@@ -265,7 +370,8 @@ import * as echarts from 'echarts'
 import {
   DataLine, Refresh, Female, Brush, Warning, Timer,
   PieChart, Histogram, TrendCharts, Clock, Coin, Grid,
-  CircleCheckFilled, AlarmClock
+  CircleCheckFilled, AlarmClock, Suitcase, Goods,
+  CircleCheck, Trophy
 } from '@element-plus/icons-vue'
 
 const stats = ref<Statistics | null>(null)
@@ -274,12 +380,16 @@ const fabricUseChartRef = ref<HTMLElement | null>(null)
 const washTrendChartRef = ref<HTMLElement | null>(null)
 const deformationChartRef = ref<HTMLElement | null>(null)
 const avgIntervalChartRef = ref<HTMLElement | null>(null)
+const carryFreqChartRef = ref<HTMLElement | null>(null)
+const replacedChartRef = ref<HTMLElement | null>(null)
 
 let fabricChart: echarts.ECharts | null = null
 let fabricUseChart: echarts.ECharts | null = null
 let washTrendChart: echarts.ECharts | null = null
 let deformationChart: echarts.ECharts | null = null
 let avgIntervalChart: echarts.ECharts | null = null
+let carryFreqChart: echarts.ECharts | null = null
+let replacedChart: echarts.ECharts | null = null
 
 const deformationTotal = computed(() => {
   if (!stats.value) return 0
@@ -480,6 +590,90 @@ const renderCharts = () => {
       }]
     })
   }
+
+  if (carryFreqChartRef.value && stats.value?.trip_stats) {
+    if (carryFreqChart) carryFreqChart.dispose()
+    carryFreqChart = echarts.init(carryFreqChartRef.value)
+    const carryData = stats.value.trip_stats.carry_frequency_by_category || []
+    carryFreqChart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const p = params[0]
+          return `${p.name}<br/>携带频次: ${p.value} 次`
+        }
+      },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: carryData.map(d => d.category),
+        axisLabel: { rotate: 30 }
+      },
+      yAxis: {
+        type: 'value',
+        name: '次'
+      },
+      series: [{
+        type: 'bar',
+        data: carryData.map((d, i) => ({
+          value: d.count,
+          itemStyle: { color: getFabricColors()[i % getFabricColors().length] }
+        })),
+        label: {
+          show: true,
+          position: 'top',
+          formatter: '{c}次',
+          fontWeight: 'bold',
+          color: '#5d4037'
+        },
+        barWidth: '50%'
+      }]
+    })
+  }
+
+  if (replacedChartRef.value && stats.value?.trip_stats) {
+    if (replacedChart) replacedChart.dispose()
+    replacedChart = echarts.init(replacedChartRef.value)
+    const replacedData = stats.value.trip_stats.most_replaced_categories || []
+    replacedChart.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any[]) => {
+          const p = params[0]
+          return `${p.name}<br/>被替换次数: ${p.value} 次`
+        }
+      },
+      grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: replacedData.map(d => d.category),
+        axisLabel: { rotate: 30 }
+      },
+      yAxis: {
+        type: 'value',
+        name: '次'
+      },
+      series: [{
+        type: 'bar',
+        data: replacedData.map((d, i) => ({
+          value: d.count,
+          itemStyle: {
+            color: d.count >= 5 ? '#ef5350' : d.count >= 3 ? '#ffa726' : '#66bb6a'
+          }
+        })),
+        label: {
+          show: true,
+          position: 'top',
+          formatter: '{c}次',
+          fontWeight: 'bold',
+          color: '#5d4037'
+        },
+        barWidth: '50%'
+      }]
+    })
+  }
 }
 
 const handleResize = () => {
@@ -488,6 +682,8 @@ const handleResize = () => {
   washTrendChart?.resize()
   deformationChart?.resize()
   avgIntervalChart?.resize()
+  carryFreqChart?.resize()
+  replacedChart?.resize()
 }
 
 onMounted(async () => {
@@ -525,6 +721,13 @@ onMounted(async () => {
 .kpi-4 { background: linear-gradient(135deg, #26c6da, #4dd0e1); }
 .kpi-5 { background: linear-gradient(135deg, #66bb6a, #81c784); }
 .kpi-6 { background: linear-gradient(135deg, #ef5350, #e57373); }
+
+.kpi-trip-1 { background: linear-gradient(135deg, #ec407a, #f06292); }
+.kpi-trip-2 { background: linear-gradient(135deg, #8e24aa, #ab47bc); }
+.kpi-trip-3 { background: linear-gradient(135deg, #5c6bc0, #7986cb); }
+.kpi-trip-4 { background: linear-gradient(135deg, #26a69a, #4db6ac); }
+.kpi-trip-5 { background: linear-gradient(135deg, #ef6c00, #ff9800); }
+.kpi-trip-6 { background: linear-gradient(135deg, #c2185b, #ec407a); }
 
 .kpi-icon {
   width: 56px;
@@ -573,5 +776,22 @@ onMounted(async () => {
   font-weight: 600;
   color: #8d6e63;
   margin: 0 0 12px 0;
+}
+
+.replaced-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+
+.replaced-tag {
+  margin-right: 0 !important;
+}
+
+.no-data {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
 }
 </style>
