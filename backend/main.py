@@ -658,6 +658,8 @@ def get_wash_plans_grouped(
 
 @app.get("/api/garments/{garment_id}/detail", response_model=schemas.GarmentDetail)
 def get_garment_detail(garment_id: int, db: Session = Depends(get_db)):
+    batch_auto_update_trip_statuses(db)
+
     garment = (
         db.query(Garment)
         .options(joinedload(Garment.storage_zone))
@@ -708,6 +710,8 @@ def get_garment_detail(garment_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/statistics", response_model=schemas.StatisticsResponse)
 def get_statistics(db: Session = Depends(get_db)):
+    batch_auto_update_trip_statuses(db)
+
     today = date.today()
 
     all_garments = db.query(Garment).filter(Garment.is_active == 1).all()
@@ -1393,22 +1397,22 @@ def trip_plan_to_schema(plan: TripPlan, db: Session) -> schemas.TripPlan:
 
 
 def get_garment_trip_occupancy(garment_id: int, db: Session) -> List[dict]:
-    """
-    获取衣物近期的出行占用情况
-    """
+    batch_auto_update_trip_statuses(db)
+
     today = date.today()
-    thirty_days_later = today + timedelta(days=30)
+    future_limit = today + timedelta(days=90)
+    past_limit = today - timedelta(days=60)
 
     trip_items = (
         db.query(TripItem)
         .join(TripPlan)
         .filter(
             TripItem.garment_id == garment_id,
-            TripPlan.status.in_([TripStatusEnum.PLANNING, TripStatusEnum.PACKING, TripStatusEnum.IN_PROGRESS]),
-            TripPlan.end_date >= today,
-            TripPlan.start_date <= thirty_days_later,
+            TripPlan.start_date <= future_limit,
+            TripPlan.end_date >= past_limit,
         )
         .options(joinedload(TripItem.trip_plan))
+        .order_by(TripPlan.start_date.desc())
         .all()
     )
 
@@ -1420,8 +1424,8 @@ def get_garment_trip_occupancy(garment_id: int, db: Session) -> List[dict]:
             "destination": ti.trip_plan.destination,
             "start_date": ti.trip_plan.start_date.isoformat(),
             "end_date": ti.trip_plan.end_date.isoformat(),
-            "status": ti.trip_plan.status.value,
-            "pack_status": ti.pack_status.value,
+            "status": ti.trip_plan.status.value if hasattr(ti.trip_plan.status, 'value') else str(ti.trip_plan.status),
+            "pack_status": ti.pack_status.value if hasattr(ti.pack_status, 'value') else str(ti.pack_status),
         })
 
     return occupancy
@@ -1513,11 +1517,47 @@ def create_trip_plan(plan: schemas.TripPlanCreate, db: Session = Depends(get_db)
     return trip_plan_to_schema(db_plan, db)
 
 
+def auto_update_trip_status(plan: TripPlan, db: Session) -> TripPlan:
+    today = date.today()
+    if plan.status in [TripStatusEnum.PLANNING, TripStatusEnum.PACKING, TripStatusEnum.IN_PROGRESS] and plan.end_date < today:
+        plan.status = TripStatusEnum.COMPLETED
+        db.commit()
+        db.refresh(plan)
+    elif plan.status in [TripStatusEnum.PLANNING, TripStatusEnum.PACKING] and plan.start_date <= today <= plan.end_date:
+        plan.status = TripStatusEnum.IN_PROGRESS
+        db.commit()
+        db.refresh(plan)
+    return plan
+
+
+def batch_auto_update_trip_statuses(db: Session):
+    today = date.today()
+    expired_plans = db.query(TripPlan).filter(
+        TripPlan.status.in_([TripStatusEnum.PLANNING, TripStatusEnum.PACKING, TripStatusEnum.IN_PROGRESS]),
+        TripPlan.end_date < today
+    ).all()
+    for plan in expired_plans:
+        plan.status = TripStatusEnum.COMPLETED
+
+    active_plans = db.query(TripPlan).filter(
+        TripPlan.status.in_([TripStatusEnum.PLANNING, TripStatusEnum.PACKING]),
+        TripPlan.start_date <= today,
+        TripPlan.end_date >= today
+    ).all()
+    for plan in active_plans:
+        plan.status = TripStatusEnum.IN_PROGRESS
+
+    if expired_plans or active_plans:
+        db.commit()
+
+
 @app.get("/api/trip-plans", response_model=List[schemas.TripPlanSummary])
 def list_trip_plans(
     status: Optional[TripStatusEnum] = None,
     db: Session = Depends(get_db)
 ):
+    batch_auto_update_trip_statuses(db)
+
     query = db.query(TripPlan)
     if status:
         query = query.filter(TripPlan.status == status)
@@ -1550,6 +1590,8 @@ def get_trip_plan(plan_id: int, db: Session = Depends(get_db)):
     plan = db.query(TripPlan).filter(TripPlan.id == plan_id).first()
     if not plan:
         raise HTTPException(status_code=404, detail="出行计划不存在")
+
+    auto_update_trip_status(plan, db)
 
     items = [trip_item_to_schema(item, db) for item in plan.items]
 

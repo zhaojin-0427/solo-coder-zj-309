@@ -98,12 +98,6 @@ export interface WashPlan {
   last_wash_date: string | null
 }
 
-export interface GarmentDetail extends Garment {
-  recent_wear_records: WearRecord[]
-  recent_wash_records: WashRecord[]
-  next_wash_plan: WashPlan | null
-}
-
 export interface PlanGroupResponse {
   overdue: WashPlan[]
   today: WashPlan[]

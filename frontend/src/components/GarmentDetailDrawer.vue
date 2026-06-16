@@ -471,11 +471,18 @@ const loadDetail = async () => {
     if (!enums.value) {
       enums.value = await enumApi.get()
     }
-    detail.value = await garmentApi.getDetail(props.garmentId)
+    const data = await garmentApi.getDetail(props.garmentId)
+    console.log('[GarmentDetailDrawer] 加载详情成功:', data)
+    console.log('[GarmentDetailDrawer] trip_occupancy:', data.trip_occupancy, 'length:', data.trip_occupancy?.length)
+    data.trip_occupancy = data.trip_occupancy || []
+    data.recent_wear_records = data.recent_wear_records || []
+    data.recent_wash_records = data.recent_wash_records || []
+    detail.value = data
     if (detail.value.next_wash_plan && detail.value.next_wash_plan.overdue_days > 0) {
       activeTab.value = 'plan'
     }
   } catch (e) {
+    console.error('[GarmentDetailDrawer] 加载详情失败:', e)
     ElMessage.error('加载详情失败')
   } finally {
     loading.value = false
@@ -503,7 +510,7 @@ const getFabricTagType = (fabric: string) => {
     '莫代尔': 'success', '锦纶': 'info', '氨纶': 'warning',
     '聚酯纤维': 'info', '竹纤维': 'success', '羊毛': 'warning'
   }
-  return (map[fabric] as any) || ''
+  return (map[fabric] as any) || 'info'
 }
 
 const getStatusClass = (urgency: string) => {
@@ -534,13 +541,13 @@ const getProgressColor = (urgency: string) => {
 
 const getTripStatusType = (status: string) => {
   const map: Record<string, string> = {
-    '规划中': '',
+    '规划中': 'primary',
     '打包中': 'warning',
     '出行中': 'primary',
     '已完成': 'success',
     '已取消': 'info'
   }
-  return map[status] || ''
+  return map[status] || 'info'
 }
 
 const hasInProgressTrip = computed(() => {

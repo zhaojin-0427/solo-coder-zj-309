@@ -25,16 +25,6 @@
           <el-icon><Brush /></el-icon>
           <span>洗护记录</span>
         </el-menu-item>
-        <el-menu-item index="/wash-plans">
-          <el-icon><Calendar /></el-icon>
-          <span>洗护计划</span>
-          <el-badge
-            v-if="washPlanPendingCount > 0"
-            :value="washPlanPendingCount"
-            :max="99"
-            class="reminder-badge"
-          />
-        </el-menu-item>
         <el-menu-item index="/reminders">
           <el-icon><Bell /></el-icon>
           <span>更换提醒</span>
@@ -66,10 +56,6 @@
           <span class="breadcrumb">{{ currentTitle }}</span>
         </div>
         <div class="header-right">
-          <el-tag type="danger" effect="light" v-if="washPlanPendingCount > 0" style="margin-right: 8px">
-            <el-icon><Calendar /></el-icon>
-            {{ washPlanPendingCount }} 件待洗护
-          </el-tag>
           <el-tag type="warning" effect="light" v-if="reminderCount > 0">
             <el-icon><Bell /></el-icon>
             {{ reminderCount }} 件需关注
@@ -77,11 +63,7 @@
         </div>
       </el-header>
       <el-main class="main-content">
-        <router-view
-          @refresh-reminders="loadReminderCount"
-          @refresh-wash-plans="loadWashPlanCount"
-          @refresh-all="refreshAll"
-        />
+        <router-view @refresh-reminders="loadReminderCount" />
       </el-main>
     </el-container>
   </el-container>
@@ -90,12 +72,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { reminderApi, washPlanApi } from '@/api'
-import { Suitcase } from '@element-plus/icons-vue'
+import { reminderApi } from '@/api'
 
 const route = useRoute()
 const reminderCount = ref(0)
-const washPlanPendingCount = ref(0)
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta.title as string) || '首页')
@@ -109,21 +89,7 @@ const loadReminderCount = async () => {
   }
 }
 
-const loadWashPlanCount = async () => {
-  try {
-    const grouped = await washPlanApi.grouped()
-    washPlanPendingCount.value = grouped.overdue.length + grouped.today.length
-  } catch (e) {
-    console.error(e)
-  }
-}
-
-const refreshAll = () => {
-  loadReminderCount()
-  loadWashPlanCount()
-}
-
-onMounted(refreshAll)
+onMounted(loadReminderCount)
 </script>
 
 <style scoped>

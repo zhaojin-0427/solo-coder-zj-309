@@ -1,9 +1,8 @@
 import axios from 'axios'
 import type {
-  StorageZone, Garment, WashRecord, WearRecord,
+  StorageZone, Garment, GarmentDetail, WashRecord, WearRecord,
   ReplacementReminder, Statistics, Enums, CareAdvice,
-  WashPlan, GarmentDetail, PlanGroupResponse,
-  TripPlanSummary, TripPlanDetail, TripPlan, TripItem
+  TripPlanSummary, TripPlanDetail, TripItem
 } from './types'
 
 const api = axios.create({
@@ -36,11 +35,6 @@ export const garmentApi = {
   delete: (id: number) => api.delete(`/garments/${id}`)
 }
 
-export const washPlanApi = {
-  list: (params?: any) => api.get<any, WashPlan[]>('/wash-plans', { params }),
-  grouped: () => api.get<any, PlanGroupResponse>('/wash-plans/grouped')
-}
-
 export const washRecordApi = {
   create: (data: any) => api.post<any, WashRecord>('/wash-records', data),
   list: (params?: any) => api.get<any, WashRecord[]>('/wash-records', { params })
@@ -69,10 +63,10 @@ export const enumApi = {
 }
 
 export const tripPlanApi = {
-  create: (data: any) => api.post<any, TripPlan>('/trip-plans', data),
-  list: (params?: any) => api.get<any, TripPlanSummary[]>('/trip-plans', { params }),
+  create: (data: any) => api.post<any, TripPlanDetail>('/trip-plans', data),
+  list: () => api.get<any, TripPlanSummary[]>('/trip-plans'),
   get: (id: number) => api.get<any, TripPlanDetail>(`/trip-plans/${id}`),
-  update: (id: number, data: any) => api.put<any, TripPlan>(`/trip-plans/${id}`, data),
+  update: (id: number, data: any) => api.put<any, TripPlanDetail>(`/trip-plans/${id}`, data),
   delete: (id: number) => api.delete(`/trip-plans/${id}`),
   regenerate: (id: number) => api.post<any, TripPlanDetail>(`/trip-plans/${id}/regenerate`)
 }
@@ -80,7 +74,7 @@ export const tripPlanApi = {
 export const tripItemApi = {
   update: (id: number, data: any) => api.put<any, TripItem>(`/trip-items/${id}`, data),
   togglePack: (id: number) => api.put<any, TripItem>(`/trip-items/${id}/toggle-pack`),
-  replace: (id: number, newGarmentId: number) => api.post<any, TripItem>(`/trip-items/${id}/replace?new_garment_id=${newGarmentId}`)
+  replace: (itemId: number, newGarmentId: number) => api.post<any, TripItem>(`/trip-items/${itemId}/replace`, null, { params: { new_garment_id: newGarmentId } })
 }
 
 export default api

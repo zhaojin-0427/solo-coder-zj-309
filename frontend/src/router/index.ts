@@ -24,12 +24,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '洗护记录', icon: 'Brush' }
   },
   {
-    path: '/wash-plans',
-    name: 'wash-plans',
-    component: () => import('@/views/WashPlans.vue'),
-    meta: { title: '洗护计划', icon: 'Calendar' }
-  },
-  {
     path: '/reminders',
     name: 'reminders',
     component: () => import('@/views/Reminders.vue'),

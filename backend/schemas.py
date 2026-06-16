@@ -156,10 +156,21 @@ class WashPlan(BaseModel):
     last_wash_date: Optional[date] = None
 
 
+class TripOccupancy(BaseModel):
+    trip_id: int
+    trip_name: str
+    destination: str
+    start_date: str
+    end_date: str
+    status: str
+    pack_status: str
+
+
 class GarmentDetail(Garment):
     recent_wear_records: List[WearRecord] = []
     recent_wash_records: List[WashRecord] = []
     next_wash_plan: Optional[WashPlan] = None
+    trip_occupancy: List[TripOccupancy] = []
 
 
 class PlanGroupResponse(BaseModel):

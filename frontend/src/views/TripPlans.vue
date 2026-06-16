@@ -72,7 +72,7 @@
                   :percentage="plan.items_count > 0 ? Math.round(plan.packed_count / plan.items_count * 100) : 0"
                   :stroke-width="8"
                   :color="plan.packed_count === plan.items_count ? '#67c23a' : '#409eff'"
-                  show-text="false"
+                  :show-text="false"
                 />
               </div>
               <div class="plan-stats">
@@ -84,80 +84,88 @@
       </el-row>
     </div>
 
+    <div v-else-if="selectedPlan && !planDetail && loading" class="plan-detail">
+      <div class="loading-container">
+        <el-icon class="loading-icon" :size="48"><Refresh /></el-icon>
+        <p class="loading-text">加载出行计划中...</p>
+      </div>
+    </div>
+
+    <div v-else-if="selectedPlan && !planDetail && !loading" class="plan-detail">
+      <el-empty description="加载出行计划失败">
+        <el-button type="primary" @click="() => selectedPlan && loadPlanDetail(selectedPlan)">
+          <el-icon><Refresh /></el-icon>
+          重新加载
+        </el-button>
+      </el-empty>
+    </div>
+
     <div v-else-if="planDetail" class="plan-detail">
       <el-card shadow="never" class="detail-header-card">
         <div class="detail-header">
           <div>
-            <h3 class="plan-title">{{ planDetail.name }}</h3>
+            <h3 class="plan-title">{{ planDetail?.name || '未命名计划' }}</h3>
             <div class="plan-meta">
-              <el-tag :type="getStatusType(planDetail.status)" size="default" effect="dark">
-                {{ planDetail.status }}
+              <el-tag :type="getStatusType(planDetail?.status || '')" size="default" effect="dark">
+                {{ planDetail?.status || '未知' }}
               </el-tag>
               <span class="meta-item">
                 <el-icon><LocationFilled /></el-icon>
-                {{ planDetail.destination }}
+                {{ planDetail?.destination || '未设置' }}
               </span>
               <span class="meta-item">
                 <el-icon><Calendar /></el-icon>
-                {{ planDetail.start_date }} 至 {{ planDetail.end_date }} ({{ planDetail.duration_days }}天)
+                {{ planDetail?.start_date }} 至 {{ planDetail?.end_date }} ({{ planDetail?.duration_days || 0 }}天)
               </span>
-              <span v-if="planDetail.weather_min !== null && planDetail.weather_max !== null" class="meta-item">
+              <span v-if="planDetail?.weather_min !== null && planDetail?.weather_max !== null" class="meta-item">
                 <el-icon><Sunny /></el-icon>
-                {{ planDetail.weather_min }}°C - {{ planDetail.weather_max }}°C
+                {{ planDetail?.weather_min }}°C - {{ planDetail?.weather_max }}°C
               </span>
-              <span v-if="planDetail.weather_description" class="meta-item">
-                {{ planDetail.weather_description }}
+              <span v-if="planDetail?.weather_description" class="meta-item">
+                {{ planDetail?.weather_description }}
               </span>
-              <span v-if="planDetail.activity_scenes" class="meta-item">
+              <span v-if="planDetail?.activity_scenes" class="meta-item">
                 <el-icon><Flag /></el-icon>
-                {{ planDetail.activity_scenes }}
+                {{ planDetail?.activity_scenes }}
               </span>
               <span class="meta-item">
                 <el-icon><RefreshRight /></el-icon>
-                {{ planDetail.change_preference }}
+                {{ planDetail?.change_preference || '未设置' }}
               </span>
             </div>
           </div>
         </div>
 
-        <el-row :gutter="20" class="summary-cards">
-          <el-col :span="6">
-            <div class="summary-card summary-must">
-              <div class="summary-icon"><el-icon><StarFilled /></el-icon></div>
-              <div>
-                <div class="summary-value">{{ planDetail.recommendation_summary.must_carry.length }}</div>
-                <div class="summary-label">必带衣物</div>
-              </div>
+        <div class="summary-cards">
+          <div class="summary-card summary-must">
+            <div class="summary-icon"><el-icon><StarFilled /></el-icon></div>
+            <div class="summary-content">
+              <div class="summary-value">{{ planDetail.recommendation_summary.must_carry.length }}</div>
+              <div class="summary-label">必带衣物</div>
             </div>
-          </el-col>
-          <el-col :span="6">
-            <div class="summary-card summary-optional">
-              <div class="summary-icon"><el-icon><CirclePlus /></el-icon></div>
-              <div>
-                <div class="summary-value">{{ planDetail.recommendation_summary.optional.length }}</div>
-                <div class="summary-label">备选衣物</div>
-              </div>
+          </div>
+          <div class="summary-card summary-optional">
+            <div class="summary-icon"><el-icon><CirclePlus /></el-icon></div>
+            <div class="summary-content">
+              <div class="summary-value">{{ planDetail.recommendation_summary.optional.length }}</div>
+              <div class="summary-label">备选衣物</div>
             </div>
-          </el-col>
-          <el-col :span="6">
-            <div class="summary-card summary-wash">
-              <div class="summary-icon"><el-icon><Brush /></el-icon></div>
-              <div>
-                <div class="summary-value">{{ planDetail.recommendation_summary.estimated_wash_after_return }}</div>
-                <div class="summary-label">返程待洗护</div>
-              </div>
+          </div>
+          <div class="summary-card summary-wash">
+            <div class="summary-icon"><el-icon><Brush /></el-icon></div>
+            <div class="summary-content">
+              <div class="summary-value">{{ planDetail.recommendation_summary.estimated_wash_after_return }}</div>
+              <div class="summary-label">返程待洗护</div>
             </div>
-          </el-col>
-          <el-col :span="6">
-            <div class="summary-card summary-wear">
-              <div class="summary-icon"><el-icon><Clock /></el-icon></div>
-              <div>
-                <div class="summary-value">{{ planDetail.recommendation_summary.total_estimated_wears }}</div>
-                <div class="summary-label">预计穿着次数</div>
-              </div>
+          </div>
+          <div class="summary-card summary-wear">
+            <div class="summary-icon"><el-icon><Clock /></el-icon></div>
+            <div class="summary-content">
+              <div class="summary-value">{{ planDetail.recommendation_summary.total_estimated_wears }}</div>
+              <div class="summary-label">预计穿着次数</div>
             </div>
-          </el-col>
-        </el-row>
+          </div>
+        </div>
 
         <el-alert 
           v-if="planDetail.recommendation_summary.change_gap_analysis.has_gap"
@@ -169,10 +177,12 @@
         >
           <template #default>
           <div class="gap-details">
-            <div v-for="(gap, cat) in planDetail.recommendation_summary.change_gap_analysis.category_gaps" :key="cat" class="gap-item" v-if="gap.gap > 0">
+            <template v-for="(gap, cat) in planDetail.recommendation_summary.change_gap_analysis.category_gaps" :key="cat">
+            <div v-if="gap.gap > 0" class="gap-item">
               <span class="gap-cat">{{ cat }}</span>
               <span class="gap-info">需要 {{ gap.needed }} 件，现有 {{ gap.available }} 件，缺口 {{ gap.gap }} 件</span>
             </div>
+            </template>
           </div>
           </template>
         </el-alert>
@@ -656,13 +666,13 @@ const replaceCategory = ref('')
 
 const getStatusType = (status: string) => {
   const map: Record<string, string> = {
-    '规划中': '',
+    '规划中': 'primary',
     '打包中': 'warning',
     '出行中': 'primary',
     '已完成': 'success',
     '已取消': 'info'
   }
-  return map[status] || ''
+  return map[status] || 'info'
 }
 
 const getFabricTagType = (fabric: string) => {
@@ -671,7 +681,7 @@ const getFabricTagType = (fabric: string) => {
     '莫代尔': 'success', '锦纶': 'info', '氨纶': 'warning',
     '聚酯纤维': 'info', '竹纤维': 'success', '羊毛': 'warning'
   }
-  return map[fabric] as any || ''
+  return (map[fabric] as any) || 'info'
 }
 
 const getColorCode = (color: string) => {
@@ -706,12 +716,49 @@ const selectPlan = async (planId: number) => {
 const loadPlanDetail = async (planId: number) => {
   loading.value = true
   try {
-    planDetail.value = await tripPlanApi.get(planId)
-    const cats = Object.keys(planDetail.value.available_replacements || {})
+    const data = await tripPlanApi.get(planId)
+    console.log('[TripPlans] 加载详情成功:', data)
+    if (!data) {
+      console.error('[TripPlans] 返回数据为空')
+      ElMessage.error('返回数据为空')
+      return
+    }
+    data.recommendation_summary = data.recommendation_summary || {
+      must_carry: [],
+      optional: [],
+      not_recommended: [],
+      total_estimated_wears: 0,
+      estimated_wash_after_return: 0,
+      change_gap_analysis: {
+        has_gap: false,
+        suggestion: '',
+        category_gaps: {}
+      }
+    }
+    data.recommendation_summary.must_carry = data.recommendation_summary.must_carry || []
+    data.recommendation_summary.optional = data.recommendation_summary.optional || []
+    data.recommendation_summary.not_recommended = data.recommendation_summary.not_recommended || []
+    data.recommendation_summary.total_estimated_wears = data.recommendation_summary.total_estimated_wears || 0
+    data.recommendation_summary.estimated_wash_after_return = data.recommendation_summary.estimated_wash_after_return || 0
+    data.recommendation_summary.change_gap_analysis = data.recommendation_summary.change_gap_analysis || {
+      has_gap: false,
+      suggestion: '',
+      category_gaps: {}
+    }
+    data.recommendation_summary.change_gap_analysis.has_gap = data.recommendation_summary.change_gap_analysis.has_gap || false
+    data.recommendation_summary.change_gap_analysis.suggestion = data.recommendation_summary.change_gap_analysis.suggestion || ''
+    data.recommendation_summary.change_gap_analysis.category_gaps = data.recommendation_summary.change_gap_analysis.category_gaps || {}
+    data.day_outfit_plans = data.day_outfit_plans || []
+    data.storage_pickup_paths = data.storage_pickup_paths || []
+    data.available_replacements = data.available_replacements || {}
+    data.items = data.items || []
+    planDetail.value = data
+    const cats = Object.keys(planDetail.value.available_replacements)
     if (cats.length > 0) {
       replaceCategory.value = cats[0]
     }
   } catch (e) {
+    console.error('[TripPlans] 加载详情失败:', e)
     ElMessage.error('加载计划详情失败')
   } finally {
     loading.value = false
@@ -881,6 +928,31 @@ loadTripPlans()
 </script>
 
 <style scoped>
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 0;
+  color: #8d6e63;
+}
+
+.loading-icon {
+  color: #ec407a;
+  animation: spin 1s linear infinite;
+  margin-bottom: 16px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-size: 14px;
+  margin: 0;
+}
+
 .plan-card {
   cursor: pointer;
   transition: all 0.3s;
@@ -978,15 +1050,49 @@ loadTripPlans()
 
 .summary-cards {
   margin-top: 20px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .summary-card {
+  flex: 1;
+  min-width: calc(25% - 12px);
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 20px;
   border-radius: 12px;
   color: white;
+  box-sizing: border-box;
+}
+
+.summary-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.summary-icon {
+  width: 48px;
+  height: 48px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.summary-value {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.summary-label {
+  font-size: 14px;
+  opacity: 0.9;
+  margin-top: 4px;
 }
 
 .summary-must {
@@ -1003,26 +1109,6 @@ loadTripPlans()
 
 .summary-wear {
   background: linear-gradient(135deg, #409eff, #66b1ff);
-}
-
-.summary-icon {
-  width: 48px;
-  height: 48px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.summary-value {
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.summary-label {
-  font-size: 14px;
-  opacity: 0.9;
 }
 
 .gap-details {
